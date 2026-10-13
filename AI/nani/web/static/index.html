@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>N.A.N.I. — Neural Analytical Network Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <!-- Markdown parser -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <!-- Ambient background glow -->
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="core-orb">
+          <div class="orb-inner"></div>
+        </div>
+        <div>
+          <h1 class="brand-title">N.A.N.I.</h1>
+          <span class="brand-subtitle">Neural Analytical Network Intelligence</span>
+        </div>
+      </div>
+
+      <div class="header-telemetry">
+        <div class="telemetry-chip" id="chip-battery">
+          <span class="chip-icon">🔋</span>
+          <span id="header-battery">Detecting...</span>
+        </div>
+        <div class="telemetry-chip" id="chip-cpu">
+          <span class="chip-icon">⚡</span>
+          <span id="header-cpu">CPU 0%</span>
+        </div>
+        <div class="telemetry-chip" id="chip-ram">
+          <span class="chip-icon">🧠</span>
+          <span id="header-ram">RAM 0%</span>
+        </div>
+        <div class="telemetry-chip status-active">
+          <span class="status-dot"></span>
+          <span>SYSTEM ACTIVE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace Layout -->
+    <main class="workspace-grid">
+      <!-- Left Sidebar: Controls & Navigation -->
+      <aside class="sidebar-panel">
+        <div class="panel-section">
+          <h2 class="section-label">SYSTEM COMMANDS</h2>
+          <nav class="nav-menu">
+            <button class="nav-item active" data-tab="chat-tab">
+              <span class="nav-icon">💬</span> Copilot Chat
+            </button>
+            <button class="nav-item" data-tab="vision-tab">
+              <span class="nav-icon">👁️</span> Screen Vision
+            </button>
+            <button class="nav-item" data-tab="council-tab">
+              <span class="nav-icon">🏛️</span> Multi-AI Council
+            </button>
+            <button class="nav-item" data-tab="radar-tab">
+              <span class="nav-icon">🛰️</span> GitHub AI Radar
+            </button>
+          </nav>
+        </div>
+
+        <!-- Laptop Hardware Controls -->
+        <div class="panel-section hardware-controls">
+          <h2 class="section-label">LAPTOP HARDWARE</h2>
+          
+          <div class="control-row">
+            <label for="vol-slider">Volume <span id="vol-display">50%</span></label>
+            <input type="range" id="vol-slider" min="0" max="100" value="50">
+          </div>
+
+          <div class="control-row">
+            <label for="bright-slider">Brightness <span id="bright-display">80%</span></label>
+            <input type="range" id="bright-slider" min="10" max="100" value="80">
+          </div>
+
+          <div class="action-btn-grid">
+            <button class="quick-btn" id="btn-mute">🔇 Mute</button>
+            <button class="quick-btn btn-danger" id="btn-lock">🔒 Lock Laptop</button>
+            <button class="quick-btn" id="btn-snap">📸 Snapshot</button>
+          </div>
+        </div>
+
+        <!-- Free Token Rotator Status -->
+        <div class="panel-section">
+          <h2 class="section-label">AI ENGINE POOL</h2>
+          <div class="provider-list" id="provider-pool">
+            <div class="provider-pill ready">Ollama (Local CPU)</div>
+            <div class="provider-pill ready">Groq (Llama 3.3 70B)</div>
+            <div class="provider-pill ready">Gemini 2.0 (Vision)</div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center Panel: Chat & Workflow Area -->
+      <section class="main-content-panel">
+        <!-- Chat Tab -->
+        <div class="tab-pane active" id="chat-tab">
+          <div class="chat-messages" id="chat-messages">
+            <div class="message nani-message">
+              <div class="message-header">
+                <span class="avatar">⚡</span>
+                <span class="sender-name">N.A.N.I.</span>
+                <span class="timestamp">Online</span>
+              </div>
+              <div class="message-body">
+                Greetings, Sir. I have established full link to your Linux laptop.
+                I can execute shell tasks, monitor hardware, inspect your screen, research GitHub repositories, and synthesize multi-model consensus. What shall we work on?
+              </div>
+            </div>
+          </div>
+
+          <!-- Chat Input Dock -->
+          <div class="input-dock">
+            <div class="action-chips">
+              <button class="chip" data-cmd="What is on my screen right now?">👁️ Inspect Screen</button>
+              <button class="chip" data-cmd="Check battery status and CPU temperature">🔋 Hardware Health</button>
+              <button class="chip" data-cmd="Scan trending AI repositories on GitHub">🛰️ Scan AI Radar</button>
+              <button class="chip" data-cmd="What are the latest breakthroughs in local LLM inference?">🔬 Deep Research</button>
+            </div>
+            
+            <form class="input-box-wrapper" id="chat-form">
+              <textarea 
+                id="user-input" 
+                placeholder="Talk to N.A.N.I. in natural language or issue laptop commands..." 
+                rows="1"
+              ></textarea>
+              <button type="submit" id="send-btn" title="Send (Enter)">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                </svg>
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Vision Tab -->
+        <div class="tab-pane" id="vision-tab">
+          <div class="vision-container">
+            <div class="vision-header">
+              <h2>👁️ Screen Vision Feed</h2>
+              <button class="quick-btn" id="btn-refresh-vision">🔄 Refresh & Analyze</button>
+            </div>
+            <div class="screen-preview-wrapper">
+              <img id="live-screen-img" src="/api/screenshot" alt="Live Screen Snapshot">
+            </div>
+            <div class="vision-analysis-box" id="vision-analysis">
+              <h3>AI Visual Breakdown</h3>
+              <p>Click "Refresh & Analyze" or ask N.A.N.I. to inspect specific windows or error messages.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Council Tab -->
+        <div class="tab-pane" id="council-tab">
+          <div class="council-container">
+            <h2>🏛️ Multi-AI Council (Consensus Engine)</h2>
+            <p class="section-desc">Queries DeepSeek-R1, Llama 3.3 70B, Qwen 2.5 Coder, and Gemini 2.0 Flash in parallel and synthesizes the unified truth.</p>
+            <div class="council-form">
+              <input type="text" id="council-input" placeholder="Enter complex architecture question or algorithmic challenge...">
+              <button class="quick-btn btn-primary" id="btn-run-council">Convene Council</button>
+            </div>
+            <div class="council-output" id="council-output">
+              <p class="placeholder-text">Enter a topic above to convene the deliberation.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Radar Tab -->
+        <div class="tab-pane" id="radar-tab">
+          <div class="radar-container">
+            <div class="radar-header">
+              <h2>🛰️ GitHub AI & Systems Radar</h2>
+              <input type="text" id="radar-search" placeholder="Search topic (e.g. topic:llm, cuda, inference)...">
+              <button class="quick-btn" id="btn-search-radar">Scan</button>
+            </div>
+            <div class="repo-grid" id="repo-grid">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Inspection Deck -->
+      <aside class="telemetry-deck">
+        <div class="deck-card">
+          <h3 class="card-title">🖥️ HARDWARE TELEMETRY</h3>
+          <div class="gauge-grid">
+            <div class="metric-box">
+              <span class="metric-label">CPU LOAD (1m)</span>
+              <span class="metric-val" id="metric-load">0.00</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-label">RAM USAGE</span>
+              <span class="metric-val" id="metric-ram-used">0%</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-label">BATTERY</span>
+              <span class="metric-val" id="metric-battery">0%</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-label">POWER</span>
+              <span class="metric-val" id="metric-power">AC</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="deck-card">
+          <h3 class="card-title">🐧 KERNEL & SPECS</h3>
+          <ul class="spec-list">
+            <li><span class="spec-key">Architecture:</span> <span class="spec-val" id="spec-arch">x86_64</span></li>
+            <li><span class="spec-key">Kernel:</span> <span class="spec-val" id="spec-kernel">Linux</span></li>
+            <li><span class="spec-key">CPU Model:</span> <span class="spec-val" id="spec-cpu-model">Intel i5-1155G7</span></li>
+            <li><span class="spec-key">Total RAM:</span> <span class="spec-val" id="spec-ram-total">7.5 GB</span></li>
+          </ul>
+        </div>
+
+        <div class="deck-card">
+          <h3 class="card-title">📸 SCREEN MINI-FEED</h3>
+          <div class="mini-screenshot" id="mini-screenshot-box">
+            <img id="mini-screen-img" src="/api/screenshot" alt="Screen Mini View">
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

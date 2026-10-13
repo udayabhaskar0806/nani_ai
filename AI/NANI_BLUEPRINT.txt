@@ -1,0 +1,213 @@
+================================================================================
+                         N.A.N.I. MASTER BLUEPRINT
+              Neural Analytical Network Intelligence (Version 1.3)
+================================================================================
+
+1. PROJECT VISION & IDENTITY
+--------------------------------------------------------------------------------
+- Name: N.A.N.I. (Neural Analytical Network Intelligence)
+- Cultural / Philosophical Meaning:
+  * "Nani?!" (Japanese: 何): "What?! / Why?!"
+  * Represents our foundational engineering rule: never accept surface-level
+    answers. Question everything down to the silicon, cache lines, and syscalls.
+- Spirit & Archetype:
+  * Tony Stark's J.A.R.V.I.S. engineered for a low-level systems developer.
+  * Analytical, proactive, intellectually rigorous, and systems-aware.
+  * Treats the creator (expert in C, C++, Linux internals, networking, CPU,
+    and OpenGL) as an equal partner.
+  * Zero Pretentious Lectures: Never lectures the creator about RAM or refuses
+    lifestyle/entertainment tasks (e.g., booking movie tickets). Action-first execution.
+
+2. THE CORE ARCHITECTURAL PILLARS
+--------------------------------------------------------------------------------
+
+[PILLAR 1: THE MULTI-AI COUNCIL (CONSENSUS ENGINE)]
+- Goal: Never rely on a single AI's hallucinations or blind spots.
+- Mechanism:
+  1. User asks a complex question or technical problem.
+  2. N.A.N.I. queries 3-4 top models in parallel (async):
+     * Model A: DeepSeek-R1 (Deep Chain-of-Thought reasoning & logic)
+     * Model B: Llama 3.3 70B (Broad architecture & high-speed reasoning)
+     * Model C: Qwen 2.5 Coder 32B (Low-level C/C++, Linux, algorithms)
+     * Model D: Gemini 3.1 Flash Lite (Multimodal vision & verified facts)
+  3. N.A.N.I. cross-examines all answers:
+     * Spots contradictions, bugs, and hallucinations.
+     * Extracts the deepest systems explanation.
+     * Synthesizes the single Gold-Standard Master Answer.
+     * Discrepancy Matrix highlights where models diverged.
+
+[PILLAR 2: FREE TOKEN ROTATOR & AUTO-FAILOVER ($0 BUDGET ENGINE)]
+- Goal: Unlimited continuous operation using 100% free tiers.
+- Mechanism:
+  * Pool of free providers:
+    1. Groq Free Tier (Llama 3.3 70B, DeepSeek-R1-distill)
+    2. Google Gemini Free Tier (1,500 free requests/day with Multimodal Vision)
+    3. OpenRouter Free Tier (:free models)
+    4. Local CPU Fallback (Ollama / AVX-512 vector acceleration)
+  * Priority Waterfall / Failover:
+    - Always use the fastest/smartest provider first.
+    - If rate limit (HTTP 429) hits, seamlessly switch to next provider with
+      zero downtime or creator interruption.
+
+[PILLAR 3: GITHUB AI RADAR & DEEP RESEARCH]
+- Goal: Keep creator ahead of the global open-source AI wave.
+- Mechanism:
+  * Automatically scans GitHub Trending for newly created or breakout AI repos.
+  * Fetches READMEs, file trees, commits, and benchmarks.
+  * Runs an Iron Man-style systems dissection:
+    - What is the actual breakthrough?
+    - How does it work under the hood (memory, kernels, compute)?
+    - What are the traps, flaws, and VRAM limits?
+    - Verdict: Clone, star, or ignore?
+
+[PILLAR 4: LINUX LAPTOP HARDWARE & SYSTEM CONTROL]
+- Goal: Direct native control over the creator's physical Linux laptop.
+- Hardware Targets:
+  * Audio: Volume and mute via `pactl`.
+  * Display: Real hardware backlight adjustment via GNOME Power DBus
+    (`org.gnome.SettingsDaemon.Power.Screen Brightness`).
+  * Telemetry: Battery state & AC detection directly from `/sys/class/power_supply/BAT0`.
+  * Session: Native session lock via `loginctl lock-session`.
+  * Processes: Run shell scripts, compile code, monitor system temperatures and load.
+
+[PILLAR 5: AUTONOMOUS CODING & FILE EDITING]
+- Goal: Build, refactor, and test software from anywhere via phone or terminal.
+- Capabilities:
+  * Read, search, and edit files on disk with diff generation.
+  * Run build pipelines (`gcc`, `g++`, `cmake`, `make`, `pytest`).
+  * Run git operations (status, diff, commit, push).
+  * Report compilation errors and auto-fix syntax or memory bugs.
+
+[PILLAR 6: AUTONOMOUS SCREEN OPERATOR (PROJECT ASTRA / COMPUTER-USE ENGINE)]
+- Goal: Autonomous multi-step desktop & browser operation by reading screen pixels
+  (Project Astra / ChatGPT Operator style).
+- Mechanism:
+  1. Closed-Loop Vision-Action Cycle:
+     * Screen Capture: High-speed frame grab via `ScreenVision` (MSS/PIL).
+     * Multimodal Perception: Gemini Vision analyzes display pixels to recognize
+       active windows, web pages, search bars, buttons, and dialogs.
+     * Coordinate Localization: Maps target interactive elements to normalized
+       coordinates (0 to 1000) scaled to the physical 3072x1728 display.
+     * Desktop Execution: Native PyAutoGUI moves the mouse, clicks, double-clicks,
+       types text, triggers hotkeys (`ctrl+l`, `enter`, `tab`), and scrolls.
+     * Visual State Verification: Captures the screen after every physical action
+       to confirm state change and re-evaluate next step.
+  2. Real-World Task Execution (e.g. Ticket Booking):
+     * When instructed: "book tickets for Devara on BookMyShow" or "search flights"
+     * Opens browser via `xdg-open`.
+     * Inspects city selection modal -> clicks location.
+     * Locates search input -> types movie name -> presses Enter.
+     * Selects movie card -> navigates showtimes and theaters.
+  3. The Sacred Human-in-the-Loop Financial Safety Gate:
+     * When reaching payment pages, credit card forms, UPI PIN, or OTP entry,
+       the operator triggers `safe_pause`.
+     * Never authorizes transactions or inputs payment details autonomously.
+     * Pauses and hands control back to the creator for secure payment.
+
+[PILLAR 7: PERSONAL MEMORY & SCHEDULER]
+- Goal: True personal assistant that remembers everything and keeps you on track.
+- Capabilities:
+  * SQLite memory database: profile, ongoing projects, preferences, notes.
+  * Background scheduler (APScheduler):
+    - Sets timers, reminders, and recurring tasks.
+    - Triggers native Linux desktop alerts (`notify-send`) and phone alerts.
+
+[PILLAR 8: LINKEDIN CAREER & PROFESSIONAL NETWORKING MANAGER]
+- Goal: Manage job opportunities and connect with kindred engineers politely.
+- Key Capabilities:
+  1. Job Radar:
+     - Scans LinkedIn and tech boards for C/C++, Linux internals, OpenGL,
+       and systems engineering roles tailored to creator's skillset.
+     - Matches requirements against creator's background and flags strong fits.
+  2. Peer & Engineer Discovery:
+     - Finds engineers, researchers, and tech founders working on low-level
+       systems, compilers, Linux, and performance engineering.
+  3. Polite Outreach Drafter:
+     - Drafts respectful, warm, professional, and humble connection messages.
+     - Never spammy, never generic, always high-signal and polite.
+- THE SACRED SAFETY DIRECTIVE (HUMAN-IN-THE-LOOP ONLY):
+  * "NEVER DO ANYTHING BY ITS OWN WITHOUT INSTRUCTION."
+  * N.A.N.I. is STRICTLY forbidden from clicking "Send", applying to any job,
+    or messaging any person autonomously.
+  * Every single draft, message, or application MUST be shown to the creator
+    first for explicit review:
+    "Sir, I drafted this polite connection note for [Name]. Would you like me
+     to send it, edit it, or discard it?"
+  * Nothing leaves the machine without direct creator approval.
+
+[PILLAR 9: SMART DEAL, COUPON & MULTI-OFFER OPTIMIZER]
+- Goal: Find the absolute lowest price on any product page across all discounts.
+- Key Capabilities:
+  1. Multi-Offer Extraction & Parsing:
+     - Reads any product/checkout page (e-commerce, electronics, travel).
+     - Gathers and classifies every available offer:
+       * Bank / Card Offers (Credit/Debit instant discounts: HDFC, ICICI, SBI, etc.)
+       * Coupon Codes & Promo Vouchers (active promo codes, seasonal vouchers)
+       * Wallet Offers (Amazon Pay, Paytm, Mobikwik cashback)
+       * UPI Offers (GPay, PhonePe, Cred, reward coins)
+       * New-User / First-Order / Membership discounts
+  2. Mathematical Stacking Calculator:
+     - Evaluates which offers can legally stack together.
+     - Calculates the maximum possible savings.
+  3. Instant Executive Summary:
+     - Presents a clear, zero-clutter recommendation:
+       "Base Price: ₹4,999
+        Best Deal Combination:
+        - Apply Coupon 'SAVE10' -> -₹500
+        - Pay via HDFC Credit Card -> -₹750 instant discount
+        - UPI / Wallet Cashback -> -₹100
+        ==> Final Effective Price: ₹3,649 (You save ₹1,350 / 27%)"
+
+3. USER INTERFACES & OPERATING MODE
+--------------------------------------------------------------------------------
+1. Antigravity-Style Terminal Console (Primary Workstation Interface):
+   - Terminal-first developer environment with rich visual telemetry.
+   - Shows real-time thoughts, visual coordinate detection, and script executions.
+   - Command triggers: `/operate <goal>`, `/see`, `/council`, `/radar`, `/rotator`, etc.
+   - No browser tab overhead needed to run the intelligence.
+2. Telegram Bot (Walkie-Talkie in your pocket):
+   - Works on Android phone, desktop, and web.
+   - Text and voice message support.
+   - Remote control of your laptop from anywhere in the world.
+
+4. STEP-BY-STEP IMPLEMENTATION ROADMAP
+--------------------------------------------------------------------------------
+[x] Phase 1: Project Foundation & Core Architecture
+    - Modular Python setup in /home/dell/Vibe Coding/AI
+    - Action-first J.A.R.V.I.S. persona prompt definition
+    - SQLite persistent memory engine
+    - Linux hardware telemetry monitor
+    - GitHub AI Radar scanner & inspector
+    - Deep Research engine with DuckDuckGo
+    - Rich Cyberpunk CLI interface
+
+[x] Phase 2: The Multi-AI Council & Free Token Rotator
+    - Build `rotator.py`: Automatic switching across free provider keys
+    - Build `council.py`: Parallel querying of 3-4 models + consensus synthesis
+    - Integrate `/council` and `/rotator` commands in CLI and Telegram
+
+[x] Phase 3: Linux Hardware Integration & Multimodal Screen Vision
+    - Implement volume (`pactl`), real GNOME DBus brightness, battery sysfs, screen lock
+    - Integrate `screen_vision.py` for real-time display capture & Gemini 3.1 Flash Lite analysis
+    - Integrate `SystemAgent` for full-system tool orchestration
+
+[x] Phase 4: Autonomous Screen Operator (Project Astra Computer Use)
+    - Build `AutonomousOperator` (`operator.py`) with closed-loop vision-action cycle
+    - Implement normalized coordinate mapping (0-1000) for 3072x1728 physical display
+    - Native PyAutoGUI actions (click, double-click, type, press, hotkey, scroll)
+    - Wire into CLI (`/operate <goal>`) and natural language agent triggers
+    - Build Human-in-the-Loop Safe Pause for checkout/payments/OTP
+
+[ ] Phase 5: Smart Deal, Coupon & Multi-Offer Optimizer
+    - Scrape product page offer sections
+    - Classify Card / Coupon / Wallet / UPI / New-User discounts
+    - Calculate optimal discount stacking formula and output summary
+
+[ ] Phase 6: LinkedIn Career & Polite Networking Engine
+    - Build job search & profile matcher for C/C++/Linux systems roles
+    - Build polite connection message drafter
+    - Implement strict Human-in-the-Loop approval gate (zero autonomous sends)
+
+[ ] Phase 7: Telegram Full Sync & Voice Notes
+    - Connect Telegram Bot with full tool execution and notification pushing
+================================================================================
