@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from nani.core.state import WorldState
-from nani.core.task import Observation, PlanStep
+from nani.core.task import Observation, PlanStep, WorkerCapability
 
 
 class WorkerResult(BaseModel):
@@ -43,8 +43,8 @@ class WorkerResult(BaseModel):
 class BaseWorker(ABC):
     @property
     @abstractmethod
-    def capability_name(self) -> str:
-        """Name of the worker capability (e.g., 'coding', 'browser', 'computer', 'system')."""
+    def capability_name(self) -> WorkerCapability:
+        """WorkerCapability handled by this worker (e.g. WorkerCapability.CODING)."""
         pass
 
     @abstractmethod

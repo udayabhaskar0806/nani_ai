@@ -1,12 +1,13 @@
-"""N.A.N.I. V2 — Configuration Management
-Loads environment variables and sets runtime paths, model capability routing defaults, and security rules.
+"""N.A.N.I. V2 — Hardened Configuration Management
+Loads environment variables and .env using pydantic-settings with SecretStr masking.
+Does not assume developer-specific workspace paths or physical screen resolutions.
 """
 
-import os
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Environment(str, Enum):
@@ -15,44 +16,34 @@ class Environment(str, Enum):
     PRODUCTION = "production"
 
 
-class Config(BaseModel):
+class Config(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
     version: str = "2.0.0a1"
-    env: Environment = Field(
-        default_factory=lambda: Environment(os.getenv("NANI_ENV", "development"))
-    )
+    env: Environment = Environment.DEVELOPMENT
 
-    # Workspace & Paths
-    workspace_root: Path = Field(
-        default_factory=lambda: Path(
-            os.getenv("NANI_WORKSPACE_ROOT", "/home/dell/Vibe Coding")
-        ).resolve()
-    )
-    db_path: Path = Field(
-        default_factory=lambda: Path(os.getenv("NANI_DB_PATH", "data/nani_v2.db"))
-    )
-    log_dir: Path = Field(default_factory=lambda: Path(os.getenv("NANI_LOG_DIR", "logs")))
+    # Workspace & Dynamic Paths (Defaults to current working directory, not hardcoded machine path)
+    workspace_root: Path = Field(default_factory=Path.cwd)
+    db_path: Path = Path("data/nani_v2.db")
+    log_dir: Path = Path("logs")
 
-    # Provider Keys (Loaded from .env)
-    gemini_api_key: str | None = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
-    groq_api_key: str | None = Field(default_factory=lambda: os.getenv("GROQ_API_KEY"))
-    openrouter_api_key: str | None = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
-    ollama_base_url: str = Field(
-        default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    )
+    # Model Provider Keys - SecretStr prevents accidental printing, repr, or logging
+    gemini_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = None
+    ollama_base_url: str = "http://localhost:11434"
 
-    # Safety Limits
-    max_steps_per_task: int = Field(
-        default_factory=lambda: int(os.getenv("NANI_MAX_STEPS_PER_TASK", "15"))
-    )
-    strict_safety_gate: bool = Field(
-        default_factory=lambda: os.getenv("NANI_STRICT_SAFETY_GATE", "true").lower() == "true"
-    )
+    # Safety Governance Limits
+    max_steps_per_task: int = 15
+    strict_safety_gate: bool = True
 
-    # Display Settings (Dell Latitude 3072x1728)
-    display_normalized_coords: bool = True
-    display_width: int = 3072
-    display_height: int = 1728
+    def get_secret(self, key_name: str) -> str | None:
+        """Retrieves unmasked secret value for authorized HTTP calls only."""
+        secret_field = getattr(self, key_name, None)
+        if isinstance(secret_field, SecretStr):
+            return secret_field.get_secret_value()
+        return None
 
 
-# Singleton instance
+# Singleton settings instance
 settings = Config()

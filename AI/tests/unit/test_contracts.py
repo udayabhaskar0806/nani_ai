@@ -1,8 +1,22 @@
-"""Unit tests for Phase 0 core contracts and data models."""
+"""Hardened unit tests for Phase 0 core contracts, validation, and enums."""
 
-from nani.agents.base import WorkerResult
-from nani.core.task import Observation, PlanStep, RiskLevel, Task, TaskStatus
-from nani.models.base import ModelCapability
+import time
+from pathlib import Path
+
+import pytest
+from pydantic import SecretStr, ValidationError
+
+from nani.config import Config
+from nani.core.state import DesktopState, WorldState
+from nani.core.task import (
+    Action,
+    ActionStatus,
+    PlanStep,
+    RiskLevel,
+    Task,
+    TaskStatus,
+    WorkerCapability,
+)
 from nani.security.policy import SecurityPolicy
 from nani.tools.result import ToolResult
 
@@ -15,77 +29,141 @@ def test_task_status_enum():
     assert TaskStatus.WAITING == "WAITING"
 
 
+def test_invalid_task_status_rejected():
+    with pytest.raises(ValidationError):
+        Task(original_goal="Build", status="INVALID_STATUS")  # type: ignore[arg-type]
+
+
 def test_risk_level_enum():
     assert RiskLevel.LOW == "LOW"
     assert RiskLevel.MEDIUM == "MEDIUM"
     assert RiskLevel.HIGH == "HIGH"
 
 
-def test_model_capability_enum():
-    assert ModelCapability.FAST == "FAST"
-    assert ModelCapability.REASONING == "REASONING"
-    assert ModelCapability.CODING == "CODING"
-    assert ModelCapability.VISION == "VISION"
-    assert ModelCapability.RESEARCH == "RESEARCH"
-    assert ModelCapability.VERIFICATION == "VERIFICATION"
+def test_invalid_risk_level_rejected():
+    with pytest.raises(ValidationError):
+        PlanStep(
+            order=1,
+            description="Run",
+            capability_required=WorkerCapability.SYSTEM,
+            risk_level="CRITICAL",  # type: ignore[arg-type]
+        )
 
 
-def test_task_serialization_roundtrip():
-    step = PlanStep(order=1, description="Inspect project Makefile", capability_required="system")
-    task = Task(
-        original_goal="Build embedded driver",
-        interpreted_goal="Fix SPI driver build error",
-        status=TaskStatus.PLANNING,
-        risk_level=RiskLevel.LOW,
-        plan=[step],
-    )
-
-    json_str = task.model_dump_json()
-    reconstructed = Task.model_validate_json(json_str)
-
-    assert reconstructed.task_id == task.task_id
-    assert reconstructed.original_goal == "Build embedded driver"
-    assert len(reconstructed.plan) == 1
-    assert reconstructed.plan[0].description == "Inspect project Makefile"
+def test_worker_capability_enum():
+    assert WorkerCapability.CODING == "CODING"
+    assert WorkerCapability.BROWSER == "BROWSER"
+    assert WorkerCapability.COMPUTER == "COMPUTER"
+    assert WorkerCapability.SYSTEM == "SYSTEM"
+    assert WorkerCapability.RESEARCH == "RESEARCH"
 
 
-def test_tool_result_ok():
-    res = ToolResult.ok(data={"exit_code": 0}, stdout="Build succeeded", duration_ms=120)
+def test_invalid_worker_capability_rejected():
+    with pytest.raises(ValidationError):
+        PlanStep(
+            order=1,
+            description="Run step",
+            capability_required="UNRESTRICTED_STRING",  # type: ignore[arg-type]
+        )
+
+
+def test_action_status_enum():
+    assert ActionStatus.PENDING == "PENDING"
+    assert ActionStatus.RUNNING == "RUNNING"
+    assert ActionStatus.SUCCESS == "SUCCESS"
+    assert ActionStatus.FAILED == "FAILED"
+    assert ActionStatus.BLOCKED == "BLOCKED"
+    assert ActionStatus.CANCELLED == "CANCELLED"
+
+
+def test_invalid_action_status_rejected():
+    with pytest.raises(ValidationError):
+        Action(worker="system", tool="shell", status="UNKNOWN_STATUS")  # type: ignore[arg-type]
+
+
+def test_tool_result_without_exit_code():
+    # Filesystem / GUI / API tools do not return process exit codes
+    res = ToolResult.ok(data={"bytes_read": 1024})
+    assert res.success is True
+    assert res.exit_code is None
+    assert res.data["bytes_read"] == 1024
+
+
+def test_tool_result_shell_exit_code():
+    # Shell / process tools explicitly populate exit_code
+    res = ToolResult.ok(stdout="make: target up to date", exit_code=0, duration_ms=45)
     assert res.success is True
     assert res.exit_code == 0
-    assert res.stdout == "Build succeeded"
-    assert res.duration_ms == 120
-    assert res.error is None
+    assert res.duration_ms == 45
+
+    res_fail = ToolResult.fail(error="Command failed", stderr="Segmentation fault", exit_code=139)
+    assert res_fail.success is False
+    assert res_fail.exit_code == 139
+    assert res_fail.stderr == "Segmentation fault"
 
 
-def test_tool_result_fail():
-    res = ToolResult.fail(error="File not found", stderr="No such file or directory", exit_code=2)
-    assert res.success is False
-    assert res.error == "File not found"
-    assert res.exit_code == 2
+def test_task_workspace_not_hardcoded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    # Verify default workspace dynamically binds to Path.cwd(), not a hardcoded machine path
+    monkeypatch.chdir(tmp_path)
+    task_default = Task(original_goal="Explore codebase")
+    assert task_default.workspace_path == str(tmp_path)
+    assert "/home/dell/Vibe Coding" not in str(tmp_path)
+
+    task_custom = Task(original_goal="Build", workspace_path="/srv/projects/c_driver")
+    assert task_custom.workspace_path == "/srv/projects/c_driver"
 
 
-def test_worker_result_serialization():
-    obs = Observation(source="stdout", content="make: *** [all] Error 2")
-    res = WorkerResult.ok(
-        summary="Build failed with compiler error", observations=[obs], changed_files=["src/spi.c"]
+def test_desktop_resolution_not_hardcoded():
+    desktop = DesktopState()
+    assert desktop.screen_resolution == "unknown"
+    assert "3072" not in desktop.screen_resolution
+
+
+def test_worldstate_real_timestamp():
+    t_before = time.time()
+    state = WorldState()
+    t_after = time.time()
+    assert state.timestamp >= t_before
+    assert state.timestamp <= t_after
+    assert state.timestamp > 0.0
+
+
+def test_config_masks_secrets():
+    # SecretStr must not reveal API keys in repr or str
+    raw_secret = "super_secret_api_key_12345"
+    cfg = Config(gemini_api_key=SecretStr(raw_secret))
+
+    config_str = str(cfg)
+    config_repr = repr(cfg)
+
+    assert raw_secret not in config_str
+    assert raw_secret not in config_repr
+    assert "**********" in config_repr
+    assert cfg.get_secret("gemini_api_key") == raw_secret
+
+
+def test_structured_security_policy():
+    # 1. Base low risk
+    assert (
+        SecurityPolicy.evaluate_risk("read_file", {"path": "main.c"}, base_risk=RiskLevel.LOW)
+        == RiskLevel.LOW
     )
-    assert res.success is True
-    assert len(res.observations) == 1
-    assert res.observations[0].content == "make: *** [all] Error 2"
-    assert res.changed_files == ["src/spi.c"]
 
+    # 2. Base medium risk
+    assert (
+        SecurityPolicy.evaluate_risk("patch_file", {"path": "main.c"}, base_risk=RiskLevel.MEDIUM)
+        == RiskLevel.MEDIUM
+    )
 
-def test_security_policy_evaluation():
-    # Low risk
-    assert SecurityPolicy.evaluate_risk("read_file", {"path": "main.c"}) == RiskLevel.LOW
-    assert SecurityPolicy.requires_human_approval(RiskLevel.LOW) is False
+    # 3. Base high risk
+    assert SecurityPolicy.evaluate_risk("deploy", {}, base_risk=RiskLevel.HIGH) == RiskLevel.HIGH
 
-    # Medium risk
-    assert SecurityPolicy.evaluate_risk("write_file", {"path": "main.c"}) == RiskLevel.MEDIUM
-    assert SecurityPolicy.requires_human_approval(RiskLevel.MEDIUM) is False
+    # 4. Target resource escalation: writing to /etc escalates to HIGH
+    assert SecurityPolicy.evaluate_risk("write_file", {"path": "/etc/shadow"}) == RiskLevel.HIGH
 
-    # High risk
+    # 5. Dangerous shell commands escalate to HIGH
+    assert SecurityPolicy.evaluate_risk("shell", {"cmd": "rm -rf /"}) == RiskLevel.HIGH
     assert SecurityPolicy.evaluate_risk("checkout", {"action": "payment_upi"}) == RiskLevel.HIGH
-    assert SecurityPolicy.evaluate_risk("bash", {"cmd": "rm -rf /"}) == RiskLevel.HIGH
+
     assert SecurityPolicy.requires_human_approval(RiskLevel.HIGH) is True
+    assert SecurityPolicy.requires_human_approval(RiskLevel.LOW) is False

@@ -1,7 +1,9 @@
 """N.A.N.I. V2 — World State Representation
 Defines real-time telemetry, active window context, and repository states.
+Does not assume developer-specific hardware or screen resolutions.
 """
 
+import time
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -21,7 +23,7 @@ class DesktopState(BaseModel):
     active_window_title: str = ""
     active_window_wm_class: str = ""
     open_windows: list[str] = Field(default_factory=list)
-    screen_resolution: str = "3072x1728"
+    screen_resolution: str = "unknown"  # Discovered dynamically at runtime by Computer worker
     last_screenshot_path: str | None = None
 
 
@@ -37,5 +39,5 @@ class WorldState(BaseModel):
     system: SystemState = Field(default_factory=SystemState)
     desktop: DesktopState = Field(default_factory=DesktopState)
     project: ProjectState = Field(default_factory=ProjectState)
-    timestamp: float = 0.0
+    timestamp: float = Field(default_factory=time.time)  # Real-time UTC epoch timestamp
     metadata: dict[str, Any] = Field(default_factory=dict)

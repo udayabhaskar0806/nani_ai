@@ -1,5 +1,5 @@
 """N.A.N.I. V2 — Tool Registry & Base Tool Interface
-Central registry for all native tools with schema validation.
+Central registry for all native tools with deterministic duplicate prevention.
 """
 
 from abc import ABC, abstractmethod
@@ -7,6 +7,12 @@ from typing import Any
 
 from nani.core.task import RiskLevel
 from nani.tools.result import ToolResult
+
+
+class DuplicateToolError(ValueError):
+    """Raised when attempting to register a tool with a name that is already registered."""
+
+    pass
 
 
 class BaseTool(ABC):
@@ -44,6 +50,16 @@ class ToolRegistry:
         self._tools: dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool) -> None:
+        """Registers a tool. Raises DuplicateToolError if a tool with the same name already exists."""
+        if tool.name in self._tools:
+            raise DuplicateToolError(
+                f"Tool '{tool.name}' is already registered. "
+                "Use replace() if you intentionally want to override an existing tool."
+            )
+        self._tools[tool.name] = tool
+
+    def replace(self, tool: BaseTool) -> None:
+        """Explicitly overrides an existing tool in the registry."""
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> BaseTool | None:

@@ -27,6 +27,7 @@ data/*.db-shm
 logs/
 *.log
 
-# OS artifacts
+# OS & Archive artifacts
 .DS_Store
 Thumbs.db
+*.zip

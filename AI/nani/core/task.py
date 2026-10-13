@@ -1,10 +1,17 @@
 """N.A.N.I. V2 — Core Task & Plan State Contracts
 Defines immutable data contracts for tasks, steps, actions, and observations.
+
+TIMESTAMP STRATEGY:
+All timestamps across N.A.N.I. core contracts (Task, Action, Observation, WorldState)
+and SQLite database records use standard UTC epoch seconds as floating point numbers
+(time.time()), ensuring microsecond precision, simple mathematical comparisons,
+and effortless conversion to ISO 8601 UTC representation across all clients.
 """
 
 import time
 import uuid
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -36,6 +43,28 @@ class StepStatus(str, Enum):
     SKIPPED = "SKIPPED"
 
 
+class ActionStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
+    CANCELLED = "CANCELLED"
+
+
+class WorkerCapability(str, Enum):
+    """Answers: Which specialized N.A.N.I. worker can execute this plan step?
+
+    Distinct from ModelCapability (which answers: What type of AI model is needed?).
+    """
+
+    CODING = "CODING"
+    BROWSER = "BROWSER"
+    COMPUTER = "COMPUTER"
+    SYSTEM = "SYSTEM"
+    RESEARCH = "RESEARCH"
+
+
 class Action(BaseModel):
     action_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     step_id: str | None = None
@@ -44,7 +73,7 @@ class Action(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     timestamp: float = Field(default_factory=time.time)
     duration_ms: int | None = None
-    status: str = "PENDING"
+    status: ActionStatus = ActionStatus.PENDING
 
 
 class Observation(BaseModel):
@@ -61,7 +90,7 @@ class PlanStep(BaseModel):
     step_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     order: int
     description: str
-    capability_required: str  # e.g. "coding", "browser", "computer", "system"
+    capability_required: WorkerCapability
     status: StepStatus = StepStatus.PENDING
     risk_level: RiskLevel = RiskLevel.LOW
     actions: list[Action] = Field(default_factory=list)
@@ -75,7 +104,7 @@ class Task(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     original_goal: str
     interpreted_goal: str | None = None
-    workspace_path: str = "/home/dell/Vibe Coding"
+    workspace_path: str = Field(default_factory=lambda: str(Path.cwd()))
     status: TaskStatus = TaskStatus.CREATED
     risk_level: RiskLevel = RiskLevel.LOW
     plan: list[PlanStep] = Field(default_factory=list)
