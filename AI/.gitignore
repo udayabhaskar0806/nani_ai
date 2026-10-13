@@ -1,0 +1,33 @@
+# Environment and Keys
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+env/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local data & logs
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+logs/*.log
+logs/*.jsonl
+
+# Build & egg-info
+build/
+dist/
+*.egg-info/

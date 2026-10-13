@@ -1,0 +1,1047 @@
+# N.A.N.I. V2 — PERSONAL AI COMPUTER OPERATING AGENT
+
+## 1. PROJECT MISSION
+
+N.A.N.I. stands for:
+
+Neural Analytical Network Intelligence.
+
+N.A.N.I. is NOT intended to be another chatbot.
+
+N.A.N.I. must become a persistent general-purpose autonomous computer agent running on top of Ubuntu Linux.
+
+The user communicates with N.A.N.I. initially through text chat.
+
+The user should provide HIGH-LEVEL OBJECTIVES rather than step-by-step commands.
+
+Example:
+
+User:
+"Open my embedded project, understand the code, find the problem, fix it, build it, test it and show me the result."
+
+N.A.N.I. must determine the intermediate steps itself.
+
+Future versions will add voice, but voice MUST NOT be part of the initial implementation.
+
+The architecture must therefore keep input/output interfaces independent from the intelligence and agent runtime.
+
+---
+
+# 2. PRIMARY DESIGN PRINCIPLE
+
+The system must operate using:
+
+GOAL
+→ UNDERSTAND
+→ OBSERVE
+→ PLAN
+→ ACT
+→ OBSERVE RESULT
+→ VERIFY
+→ REPLAN IF NECESSARY
+→ CONTINUE
+→ FINAL VERIFICATION
+→ REPORT
+
+N.A.N.I. must NOT assume that an action succeeded merely because it executed a command or clicked something.
+
+Every meaningful action must produce observable evidence.
+
+---
+
+# 3. TARGET EXPERIENCE
+
+Example 1:
+
+User:
+
+"NANI, fix my SPI driver."
+
+N.A.N.I. should autonomously:
+
+1. Determine which project the user means using context/memory.
+2. Locate repository.
+3. Inspect repository.
+4. Check Git state.
+5. Understand project structure.
+6. Locate relevant SPI code.
+7. Understand build system.
+8. Reproduce problem.
+9. Analyze compiler/runtime errors.
+10. Research documentation if necessary.
+11. Modify appropriate files.
+12. Build.
+13. Detect failures.
+14. Diagnose.
+15. Modify again.
+16. Rebuild.
+17. Run tests/static checks.
+18. Inspect Git diff.
+19. Verify requested behavior.
+20. Open/show project in VS Code when useful.
+21. Report exactly what changed and why.
+
+The user should NOT have to tell N.A.N.I.:
+
+"run make"
+"open this file"
+"change line 150"
+"compile again"
+
+N.A.N.I. decides those intermediate actions.
+
+---
+
+# 4. COMPUTER-USE REQUIREMENT
+
+N.A.N.I. must eventually be capable of controlling the real Ubuntu desktop.
+
+Required abilities:
+
+SCREEN:
+- capture screenshots
+- understand visible UI
+- identify applications/windows
+- detect dialogs
+- detect errors
+- compare before/after screen state
+
+MOUSE:
+- move
+- click
+- double-click
+- right-click
+- drag
+- scroll
+
+KEYBOARD:
+- type
+- keyboard shortcuts
+- special keys
+- application navigation
+
+WINDOWS/APPLICATIONS:
+- detect running applications
+- launch application
+- focus application
+- switch applications
+- close application
+- inspect application/window state
+
+Examples:
+
+"Open VS Code."
+
+"Open Firefox and search for X."
+
+"Open my project and fix the error."
+
+---
+
+# 5. DO NOT USE GUI WHEN A BETTER INTERFACE EXISTS
+
+N.A.N.I. should behave intelligently rather than copying human inefficiency.
+
+Preferred execution order:
+
+1. Native API / MCP / structured integration
+2. Filesystem/system API
+3. CLI
+4. Browser DOM / Playwright
+5. Desktop accessibility interface
+6. Screenshot + vision + mouse/keyboard
+
+Example:
+
+To read a 5000-line source file:
+
+WRONG:
+scroll through VS Code and visually read everything.
+
+RIGHT:
+read the source file directly.
+
+To compile:
+
+RIGHT:
+execute compiler directly and capture stdout/stderr.
+
+VS Code can still be opened so the user can observe the result.
+
+GUI automation is the universal fallback, not the primary interface.
+
+---
+
+# 6. CORE ARCHITECTURE
+
+Implement the following logical architecture:
+
+USER
+↓
+CHAT UI
+↓
+NANI ORCHESTRATOR
+↓
+TASK MANAGER
+↓
+GOAL INTERPRETER
+↓
+PLANNER
+↓
+CAPABILITY ROUTER
+↓
+AGENT EXECUTOR
+↓
+TOOLS / SPECIALIZED AGENTS
+↓
+OBSERVATION
+↓
+VERIFIER
+↓
+RECOVERY / REPLANNER
+↓
+TASK MANAGER
+↓
+CHAT
+
+N.A.N.I. must maintain task state throughout execution.
+
+---
+
+# 7. AGENT LOOP
+
+Conceptually implement:
+
+while task is not finished:
+
+    observe current environment
+
+    retrieve relevant memory
+
+    reason about current state
+
+    decide next action
+
+    select appropriate tool/agent
+
+    execute action
+
+    capture result
+
+    compare expected vs actual result
+
+    store action and observation
+
+    if action failed:
+        diagnose
+        modify plan
+        retry using another strategy
+
+    if objective appears complete:
+        independently verify completion
+
+        if verification succeeds:
+            finish task
+
+        otherwise:
+            continue execution
+
+The exact implementation can use an existing reliable agent framework rather than recreating this entire runtime manually.
+
+---
+
+# 8. TASK MODEL
+
+Every user objective becomes a persistent task.
+
+Suggested structure:
+
+Task
+- task_id
+- original_goal
+- interpreted_goal
+- constraints
+- workspace
+- status
+- risk_level
+- created_at
+- updated_at
+- plan
+- current_step
+- actions
+- observations
+- errors
+- retries
+- artifacts
+- verification
+- final_result
+
+Task states:
+
+CREATED
+PLANNING
+RUNNING
+WAITING
+VERIFYING
+COMPLETED
+FAILED
+PAUSED
+CANCELLED
+
+Tasks must survive UI refreshes and agent/model failures.
+
+Later they should survive N.A.N.I. process restarts.
+
+---
+
+# 9. SPECIALIZED AGENTS
+
+N.A.N.I. should present ONE personality/interface to the user but internally delegate work.
+
+Implement adapters for:
+
+NANI ORCHESTRATOR
+|
++-- Coding Agent
+|
++-- Browser Agent
+|
++-- Computer/Desktop Agent
+|
++-- System Agent
+|
++-- Research Agent
+|
++-- Memory Agent
+|
++-- Verification Agent
+
+Do NOT make each agent an independent user-facing assistant.
+
+They are workers controlled by N.A.N.I.
+
+---
+
+# 10. CODING AGENT
+
+Do NOT create a complete autonomous coding agent from scratch.
+
+Evaluate and integrate mature open-source coding-agent projects.
+
+The coding worker must support:
+
+- repository exploration
+- semantic/code search
+- file reading
+- file editing
+- patch generation
+- shell commands
+- builds
+- tests
+- Git status
+- Git diff
+- debugging
+- iterative error correction
+
+OpenHands should be evaluated first.
+
+N.A.N.I. should wrap it behind an internal CodingAgent interface so OpenHands can later be replaced without changing the rest of N.A.N.I.
+
+Example:
+
+NANI
+→ CodingAgent
+→ OpenHands adapter
+→ repository
+
+---
+
+# 11. BROWSER AGENT
+
+Evaluate Browser Use and similar mature browser-agent projects.
+
+Browser worker requirements:
+
+- launch browser
+- open URL
+- inspect DOM
+- click
+- type
+- scroll
+- select
+- extract page information
+- work across tabs
+- download files
+- upload files where authorized
+- take screenshots
+- detect navigation failures
+- retry/replan
+
+Prefer DOM/Playwright-style interaction.
+
+Vision/mouse interaction should be fallback.
+
+Example:
+
+User:
+"Find the best train for tomorrow evening."
+
+N.A.N.I.:
+
+understand goal
+→ browser worker
+→ search
+→ inspect options
+→ compare
+→ select according to constraints
+→ prepare booking
+→ verify passenger/date/train information
+→ request confirmation before consequential transaction
+
+---
+
+# 12. DESKTOP COMPUTER AGENT
+
+Build/integrate a Linux computer-use worker.
+
+Research existing computer-use implementations before implementing one from scratch.
+
+Evaluate:
+
+- UFO³ Linux device-agent architecture
+- Anthropic computer-use reference architecture
+- other maintained Linux desktop-agent repositories
+
+Required architecture:
+
+SCREENSHOT
+↓
+PERCEPTION
+↓
+REASONING
+↓
+ACTION
+↓
+SCREENSHOT
+↓
+CHANGE DETECTION
+↓
+NEXT ACTION
+
+ComputerAgent API should eventually expose:
+
+observe_screen()
+launch_application()
+focus_window()
+click()
+double_click()
+right_click()
+scroll()
+type_text()
+press_key()
+hotkey()
+drag()
+wait()
+capture_screen()
+
+Every GUI action should produce an observation.
+
+---
+
+# 13. SYSTEM AGENT
+
+Expose structured Linux capabilities.
+
+Required tools:
+
+filesystem:
+- read_file
+- write_file
+- patch_file
+- search_files
+- list_directory
+- create_directory
+- copy_file
+- move_file
+
+shell:
+- run_command
+- run_script
+
+process:
+- list_processes
+- process_info
+- start_process
+- terminate_process
+
+system:
+- CPU
+- RAM
+- disk
+- temperature
+- battery
+- network
+- services
+
+git:
+- status
+- diff
+- log
+- branch
+
+application:
+- launch
+- detect
+- focus
+- close
+
+Return structured results wherever possible.
+
+Example:
+
+{
+  "success": true,
+  "exit_code": 0,
+  "stdout": "...",
+  "stderr": "...",
+  "duration_ms": 1021
+}
+
+---
+
+# 14. CAPABILITY ROUTER
+
+N.A.N.I. must dynamically select the correct worker.
+
+Examples:
+
+"Fix my kernel driver"
+
+→ CodingAgent
+
+"Find flights"
+
+→ BrowserAgent
+
+"Open VS Code"
+
+→ ComputerAgent/SystemAgent
+
+"Why is my PC slow?"
+
+→ SystemAgent
+
+"Research this compiler error and fix it"
+
+→ ResearchAgent
+→ CodingAgent
+→ VerificationAgent
+
+Tasks can use multiple agents sequentially or in parallel.
+
+---
+
+# 15. MODEL ROUTER
+
+N.A.N.I. MUST NOT depend on one AI provider.
+
+Create:
+
+ModelProvider interface
+
+Possible providers:
+
+- OpenAI
+- Anthropic
+- Gemini
+- DeepSeek
+- Qwen
+- Groq-hosted models
+- OpenRouter
+- local Ollama/vLLM models
+
+Models must be configurable.
+
+Different tasks may use different models.
+
+Example:
+
+routing/classification:
+cheap/fast model
+
+hard reasoning:
+strong reasoning model
+
+coding:
+strong coding model
+
+vision/computer use:
+strong multimodal model
+
+verification:
+independent reviewer model
+
+Do not query every model for every task.
+
+Use multi-model verification only when useful.
+
+---
+
+# 16. MEMORY ARCHITECTURE
+
+Separate memory types.
+
+WORKING MEMORY:
+current task/conversation.
+
+EPISODIC MEMORY:
+previous actions and experiences.
+
+PROJECT MEMORY:
+repository, build commands, architecture, previous issues.
+
+SEMANTIC MEMORY:
+facts learned.
+
+SKILL MEMORY:
+successful workflows.
+
+PREFERENCE MEMORY:
+user preferences.
+
+SYSTEM MEMORY:
+machine configuration and known environment.
+
+Use SQLite initially.
+
+Add vector retrieval only where semantic search is genuinely useful.
+
+Do not send entire memory database to the LLM.
+
+Retrieve only relevant context.
+
+---
+
+# 17. WORLD STATE
+
+Maintain current machine state.
+
+Example:
+
+SystemState:
+- CPU
+- RAM
+- disk
+- battery
+- network
+- temperatures
+
+DesktopState:
+- active window
+- applications
+- current screenshot
+- previous screenshot
+
+ProjectState:
+- active project
+- Git branch
+- dirty files
+- build state
+
+TaskState:
+- active tasks
+- paused tasks
+- failed tasks
+
+CapabilityState:
+- available tools
+- connected models
+- browser available
+- desktop available
+
+N.A.N.I. should reason using this state.
+
+---
+
+# 18. RECOVERY ENGINE
+
+Failure must NOT immediately return control to user.
+
+Recovery sequence:
+
+ACTION FAILED
+↓
+inspect error
+↓
+identify probable cause
+↓
+retry if transient
+↓
+try alternative method
+↓
+research if necessary
+↓
+replan
+↓
+continue
+
+Examples:
+
+GUI button failed:
+→ retry once
+→ keyboard shortcut
+→ accessibility interface
+→ CLI/API alternative
+
+Build failed:
+→ inspect compiler error
+→ inspect relevant source
+→ fix
+→ rebuild
+
+Browser selector failed:
+→ refresh state
+→ inspect DOM again
+→ alternate selector
+→ vision fallback
+
+Set loop limits.
+
+Detect repeated identical failures.
+
+Never retry indefinitely.
+
+---
+
+# 19. VERIFICATION ENGINE
+
+N.A.N.I. must prove task completion.
+
+Coding verification:
+
+- build passes
+- tests pass
+- expected files exist
+- Git diff inspected
+- unexpected modifications detected
+
+Browser verification:
+
+- correct page/state reached
+- selected values checked
+- dates/prices/options verified
+
+Desktop verification:
+
+- expected application/window state exists
+
+System verification:
+
+- compare system state before and after
+
+The executor should not be the sole authority deciding whether its own work succeeded.
+
+---
+
+# 20. ACTION JOURNAL
+
+Record:
+
+timestamp
+task
+agent
+action
+parameters
+result
+screen before/after when relevant
+error
+retry
+files changed
+
+The user should eventually be able to inspect:
+
+"What did NANI do?"
+
+and receive an exact answer.
+
+---
+
+# 21. SECURITY MODEL
+
+High autonomy does NOT mean unlimited privilege.
+
+Use task-scoped autonomy.
+
+LOW RISK:
+automatic
+
+Examples:
+read project
+compile
+test
+inspect system
+web research
+
+MEDIUM:
+automatic but logged
+
+Examples:
+modify project files
+start/stop development applications
+
+HIGH:
+require confirmation
+
+Examples:
+financial transaction
+purchase
+send external message
+publish code
+delete important data
+major system-security change
+credential operation
+
+Never expose secrets directly to models when avoidable.
+
+Use sandboxing for experimental code execution.
+
+---
+
+# 22. OPEN-SOURCE-FIRST RULE
+
+CRITICAL:
+
+Before implementing any large subsystem, search GitHub and official documentation.
+
+Evaluate whether a mature maintained open-source project already provides it.
+
+Prefer:
+
+ADAPTER
+over
+REIMPLEMENTATION.
+
+Do NOT copy entire external projects into N.A.N.I.
+
+Use clean integration boundaries.
+
+Example:
+
+agents/openhands_adapter.py
+
+agents/browser_use_adapter.py
+
+agents/computer_agent_adapter.py
+
+This allows replacement later.
+
+---
+
+# 23. INITIAL PROJECT STRUCTURE
+
+nani/
+|
++-- core/
+|   +-- orchestrator.py
+|   +-- task_manager.py
+|   +-- task.py
+|   +-- state.py
+|   +-- planner.py
+|   +-- router.py
+|   +-- recovery.py
+|   +-- verifier.py
+|
++-- agents/
+|   +-- base.py
+|   +-- coding.py
+|   +-- browser.py
+|   +-- computer.py
+|   +-- system.py
+|   +-- research.py
+|
++-- models/
+|   +-- base.py
+|   +-- router.py
+|   +-- providers/
+|
++-- tools/
+|   +-- registry.py
+|   +-- filesystem.py
+|   +-- shell.py
+|   +-- process.py
+|   +-- system.py
+|   +-- git.py
+|
++-- computer/
+|   +-- screen.py
+|   +-- windows.py
+|   +-- mouse.py
+|   +-- keyboard.py
+|   +-- vision.py
+|
++-- browser/
+|
++-- memory/
+|   +-- database.py
+|   +-- working.py
+|   +-- projects.py
+|   +-- retrieval.py
+|
++-- security/
+|   +-- policy.py
+|   +-- approvals.py
+|   +-- sandbox.py
+|
++-- skills/
+|
++-- interfaces/
+|   +-- cli.py
+|   +-- web.py
+|
++-- tests/
+|
++-- config/
+|
++-- main.py
+
+Existing N.A.N.I. V1.2 functionality should be migrated where useful rather than rewritten blindly.
+
+---
+
+# 24. DEVELOPMENT PHASES
+
+PHASE 0
+Audit current N.A.N.I. V1.2.
+
+Do NOT modify code yet.
+
+Produce:
+
+- architecture map
+- reusable modules
+- technical debt
+- dependencies
+- features to retain
+- features to replace
+- migration plan
+
+PHASE 1
+Core runtime.
+
+Implement:
+
+- Task
+- TaskManager
+- Agent interface
+- Tool interface
+- Model interface
+- Orchestrator
+- Router
+- action journal
+
+PHASE 2
+System tools.
+
+Implement/integrate:
+
+- filesystem
+- shell
+- process
+- system
+- Git
+- application launching
+
+PHASE 3
+Coding worker.
+
+Integrate OpenHands or best evaluated alternative.
+
+Acceptance test:
+
+"Inspect this C project, fix compilation errors, build and test."
+
+PHASE 4
+Browser worker.
+
+Integrate Browser Use/BrowserCode or best evaluated alternative.
+
+Acceptance test:
+
+"Search a website, extract options and compare them."
+
+PHASE 5
+Desktop computer worker.
+
+Integrate/build Linux screen perception + application/window + mouse/keyboard control.
+
+Acceptance test:
+
+"Open VS Code and open project X."
+
+PHASE 6
+Unified autonomous loop.
+
+Combine:
+
+planner
+router
+workers
+observation
+verification
+recovery
+
+PHASE 7
+Memory and persistent tasks.
+
+PHASE 8
+Security/sandboxing.
+
+PHASE 9
+Full integration tests.
+
+PHASE 10
+Background daemon/events.
+
+PHASE 11
+Skill learning/tool creation.
+
+PHASE 12
+Voice — FUTURE ONLY.
+
+---
+
+# 25. FIRST MAJOR ACCEPTANCE TEST
+
+The system is not considered N.A.N.I. V2 Alpha until this succeeds:
+
+USER:
+
+"NANI, open project X in VS Code, understand the project, find why it doesn't build, fix the necessary files, compile it, run available tests and show me the final result."
+
+User provides NO intermediate instructions.
+
+Expected:
+
+NANI
+→ identifies project
+→ inspects project
+→ opens VS Code
+→ reads code using direct filesystem tools
+→ determines build system
+→ builds
+→ detects errors
+→ diagnoses
+→ edits
+→ rebuilds
+→ tests
+→ verifies
+→ displays result
+→ reports changes
+
+---
+
+# 26. SECOND ACCEPTANCE TEST
+
+USER:
+
+"NANI, open the browser and find the best available travel

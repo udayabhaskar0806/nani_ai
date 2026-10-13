@@ -1,43 +1,58 @@
+"""N.A.N.I. V2 — Configuration Management
+Loads environment variables and sets runtime paths, model capability routing defaults, and security rules.
+"""
+
 import os
+from enum import Enum
 from pathlib import Path
-from dotenv import load_dotenv
 
-# Base paths
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+from pydantic import BaseModel, Field
 
-# Load environment variables
-load_dotenv(BASE_DIR / ".env")
 
-class Config:
-    # App info
-    APP_NAME = "N.A.N.I."
-    APP_TAGLINE = "Neural Analytical Network Intelligence"
-    VERSION = "0.1.0"
+class Environment(str, Enum):
+    DEVELOPMENT = "development"
+    TESTING = "testing"
+    PRODUCTION = "production"
 
-    # Database
-    DB_PATH = DATA_DIR / "nani_memory.db"
 
-    # AI Model Settings
-    AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")  # 'auto' for rotator, or 'ollama', 'groq', 'openrouter', 'gemini'
-    API_KEY = os.getenv("AI_API_KEY", "")
-    BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:11434/v1")
-    MODEL_NAME = os.getenv("AI_MODEL_NAME", "qwen2.5:3b")
+class Config(BaseModel):
+    version: str = "2.0.0a1"
+    env: Environment = Field(
+        default_factory=lambda: Environment(os.getenv("NANI_ENV", "development"))
+    )
 
-    # Multi-Provider Free Tier Keys for Auto-Rotator
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-    DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    # Workspace & Paths
+    workspace_root: Path = Field(
+        default_factory=lambda: Path(
+            os.getenv("NANI_WORKSPACE_ROOT", "/home/dell/Vibe Coding")
+        ).resolve()
+    )
+    db_path: Path = Field(
+        default_factory=lambda: Path(os.getenv("NANI_DB_PATH", "data/nani_v2.db"))
+    )
+    log_dir: Path = Field(default_factory=lambda: Path(os.getenv("NANI_LOG_DIR", "logs")))
 
-    # GitHub API (Optional token to bypass rate limits, but works without it)
-    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+    # Provider Keys (Loaded from .env)
+    gemini_api_key: str | None = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
+    groq_api_key: str | None = Field(default_factory=lambda: os.getenv("GROQ_API_KEY"))
+    openrouter_api_key: str | None = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
+    ollama_base_url: str = Field(
+        default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    )
 
-    # Hardware Info
-    HARDWARE_PROFILE = {
-        "cpu": "Intel Core i5-1155G7 (AVX-512)",
-        "ram_gb": 8,
-        "os": "Linux",
-    }
+    # Safety Limits
+    max_steps_per_task: int = Field(
+        default_factory=lambda: int(os.getenv("NANI_MAX_STEPS_PER_TASK", "15"))
+    )
+    strict_safety_gate: bool = Field(
+        default_factory=lambda: os.getenv("NANI_STRICT_SAFETY_GATE", "true").lower() == "true"
+    )
+
+    # Display Settings (Dell Latitude 3072x1728)
+    display_normalized_coords: bool = True
+    display_width: int = 3072
+    display_height: int = 1728
+
+
+# Singleton instance
+settings = Config()

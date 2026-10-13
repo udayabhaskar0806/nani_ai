@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nani"
+version = "2.0.0a1"
+description = "N.A.N.I. V2 — Personal AI Computer Operating Agent for Linux"
+readme = "README.md"
+authors = [
+    { name = "Uday Veduruparthi" }
+]
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["ai", "agent", "operating-system", "linux", "automation"]
+
+# Core lightweight runtime dependencies (zero framework bloat)
+dependencies = [
+    "pydantic>=2.7.0",
+    "rich>=13.7.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+# Native Linux desktop automation & screen vision
+desktop = [
+    "mss>=9.0.1",
+    "pillow>=10.2.0",
+    "pyautogui>=0.9.54",
+]
+
+# DOM-first browser automation
+browser = [
+    "playwright>=1.42.0",
+]
+
+# Optional visual browser-agent fallback
+browser-agent = [
+    "browser-use>=0.1.0",
+]
+
+# Optional git-native pair programmer adapter
+coding = [
+    "aider-chat>=0.50.0",
+]
+
+# Development, testing, type-checking, and linting
+dev = [
+    "pytest>=8.1.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+all = [
+    "nani[desktop,browser,dev]"
+]
+
+[project.scripts]
+nani = "nani.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nani*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501", # Line length handled by formatter
+    "B008", # Do not perform function calls in argument defaults
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pyautogui.*",
+    "mss.*",
+    "PIL.*",
+    "playwright.*",
+    "browser_use.*",
+    "aider.*"
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
