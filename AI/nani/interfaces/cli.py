@@ -75,12 +75,39 @@ class InteractiveCLI:
             self.console.print(
                 f"[bold green]✓ Task Completed Successfully![/bold green] (Status: {final_task.status.value})\n"
             )
+            detailed = self.tm.get_task(task.task_id)
+            if detailed and detailed.plan:
+                for step in detailed.plan:
+                    for act in step.actions:
+                        if act.result:
+                            res_data = (
+                                act.result.get("data")
+                                if (isinstance(act.result, dict) and "data" in act.result)
+                                else act.result
+                            )
+                            if isinstance(res_data, dict) and "results" in res_data:
+                                for r in res_data["results"]:
+                                    self.console.print(
+                                        f"• [bold cyan]{r.get('title')}[/bold cyan]\n  [dim]{r.get('url')}[/dim]\n  {r.get('snippet')}\n"
+                                    )
+                            elif isinstance(res_data, dict) and res_data:
+                                for k, v in res_data.items():
+                                    self.console.print(f"  [cyan]{k}:[/cyan] {v}")
+                                self.console.print()
+                            elif act.result.get("stdout"):
+                                stdout_text = str(act.result.get("stdout") or "").strip()
+                                self.console.print(f"[dim]{stdout_text}[/dim]\n")
         elif final_task.status == TaskStatus.WAITING:
             self.console.print(
                 f"[bold yellow]⏸ Task Paused — Approval Required[/bold yellow] (Status: {final_task.status.value})\n"
             )
         else:
             err = final_task.metadata.get("error", "Unknown error")
+            if "UNSUPPORTED_GOAL" in str(err):
+                # Conversational or unstructured prompt fallback to model
+                self.console.print("[dim]Consulting AI model...[/dim]")
+                await self.ask_model(goal)
+                return
             self.console.print(
                 f"[bold red]✗ Task Halted:[/bold red] {err} (Status: {final_task.status.value})\n"
             )
@@ -114,6 +141,19 @@ class InteractiveCLI:
             "\nType your goal, a command, or [bold cyan]'help'[/bold cyan] / [bold cyan]'exit'[/bold cyan].\n"
         )
 
+        greetings = {
+            "hi",
+            "hello",
+            "hey",
+            "greetings",
+            "who are you",
+            "what can you do",
+            "how are you",
+            "good morning",
+            "good afternoon",
+            "good evening",
+        }
+
         while True:
             try:
                 line = input("nani ❯ ").strip()
@@ -139,6 +179,8 @@ class InteractiveCLI:
                         self.console.print(
                             f"  [cyan]{name:18}[/cyan] [dim]({t.capability.value:8})[/dim] {t.description}"
                         )
+                elif line.lower() in greetings or line.endswith("?"):
+                    await self.ask_model(line)
                 elif line.lower().startswith("ask "):
                     prompt = line[4:].strip()
                     await self.ask_model(prompt)

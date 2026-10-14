@@ -122,12 +122,14 @@ CREATE TABLE IF NOT EXISTS actions (
 -- Empirical Observations (Evidence gathered after action)
 CREATE TABLE IF NOT EXISTS observations (
     observation_id TEXT PRIMARY KEY,
+    task_id TEXT,
     action_id TEXT,
     step_id TEXT,
     timestamp REAL NOT NULL,           -- UTC epoch seconds
     source TEXT NOT NULL,
     content TEXT NOT NULL,
     metadata_json TEXT DEFAULT '{}',
+    FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
     FOREIGN KEY(action_id) REFERENCES actions(action_id) ON DELETE CASCADE
 );
 

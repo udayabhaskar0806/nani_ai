@@ -133,7 +133,66 @@ int main(void) {
 
             return [step1, step2, step3, step4]
 
+        # Research Goal: Autonomous web search and knowledge synthesis
+        if any(
+            k in goal_lower for k in ("research", "search", "lookup", "find out", "google", "ddg")
+        ):
+            step = PlanStep(
+                order=1,
+                description=goal,
+                capability_required=WorkerCapability.RESEARCH,
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+                verification={"type": "tool_success"},
+                actions=[
+                    Action(
+                        worker="research_worker",
+                        tool="web_search",
+                        parameters={"query": goal},
+                        status=ActionStatus.PENDING,
+                    )
+                ],
+            )
+            return [step]
+
+        # System Hardware Telemetry Goal
+        if any(
+            k in goal_lower
+            for k in (
+                "hardware",
+                "battery",
+                "system resources",
+                "ram",
+                "cpu load",
+                "audio volume",
+                "system info",
+            )
+        ):
+            op = "get_system_resources"
+            if "battery" in goal_lower:
+                op = "get_battery"
+            elif "volume" in goal_lower:
+                op = "get_volume"
+
+            step = PlanStep(
+                order=1,
+                description=goal,
+                capability_required=WorkerCapability.SYSTEM,
+                risk_level=RiskLevel.LOW,
+                status=StepStatus.PENDING,
+                verification={"type": "tool_success"},
+                actions=[
+                    Action(
+                        worker="system_worker",
+                        tool="system_hardware",
+                        parameters={"operation": op},
+                        status=ActionStatus.PENDING,
+                    )
+                ],
+            )
+            return [step]
+
         # Explicit goal rejection: Do NOT complete unsupported objectives with echo fallback
         raise ValueError(
-            f"UNSUPPORTED_GOAL: Objective '{goal}' is not supported in Phase 1 deterministic planner."
+            f"UNSUPPORTED_GOAL: Objective '{goal}' is not supported in deterministic planner."
         )
