@@ -127,6 +127,11 @@ class SkillStore:
         if "session_type" in pre and pre["session_type"] != snap.get("session_type"):
             return False
 
+        if "desktop" in pre:
+            current_desktop = str(snap.get("desktop") or "")
+            if not any(d.lower() in current_desktop.lower() for d in pre["desktop"]):
+                return False
+
         return True
 
     def find_matching_skill(
@@ -140,10 +145,28 @@ class SkillStore:
         clean_query = query.strip()
         snap = grounding_snap or MachineGrounding.get_snapshot()
 
+        is_mutation = bool(
+            re.search(
+                r"\b(increase|decrease|raise|lower|set|change|adjust|dim|brighten|turn\s+(?:up|down)|step\s*(?:up|down))\b",
+                clean_query,
+                re.IGNORECASE,
+            )
+        )
+
         # Direct Regex / Pattern match across stored verified skills
         skills = self.list_skills()
         for skill in skills:
             try:
+                # Read-only skills must never trigger for mutation / setting queries
+                is_read_only = (
+                    skill.command_template.startswith("cat ")
+                    or skill.description.lower().startswith("reads ")
+                    or skill.description.lower().startswith("displays ")
+                    or skill.description.lower().startswith("inspects ")
+                )
+                if is_mutation and is_read_only:
+                    continue
+
                 if re.search(skill.intent_pattern, clean_query, re.IGNORECASE):
                     if self._verify_preconditions(skill, snap):
                         self._increment_success(skill.skill_id)
@@ -256,10 +279,26 @@ class SkillStore:
         defaults = [
             VerifiedSkill(
                 skill_id="skill-sysfs-brightness",
-                intent_pattern=r"\b(check|read|get|whats?\s+my|what\s+is\s+my|my|screen)\s+.*brightness\b",
+                intent_pattern=r"^\s*(check|read|get|show|whats?\s+my|what\s+is\s+my|current)\s+.*brightness\b",
                 description="Reads screen brightness directly from Linux kernel sysfs",
                 preconditions={},
                 command_template="cat /sys/class/backlight/*/brightness",
+                verification_rule="exit_code == 0",
+            ),
+            VerifiedSkill(
+                skill_id="skill-gnome-brightness-up",
+                intent_pattern=r"\b(increase|raise|brighten|turn\s+up|step\s*up)\s+.*brightness\b",
+                description="Increases display brightness via GNOME Power D-Bus",
+                preconditions={"desktop": ["GNOME", "ubuntu:GNOME"]},
+                command_template="gdbus call --session --dest org.gnome.SettingsDaemon.Power --object-path /org/gnome/SettingsDaemon/Power --method org.gnome.SettingsDaemon.Power.Screen.StepUp",
+                verification_rule="exit_code == 0",
+            ),
+            VerifiedSkill(
+                skill_id="skill-gnome-brightness-down",
+                intent_pattern=r"\b(decrease|lower|dim|turn\s+down|step\s*down)\s+.*brightness\b",
+                description="Decreases display brightness via GNOME Power D-Bus",
+                preconditions={"desktop": ["GNOME", "ubuntu:GNOME"]},
+                command_template="gdbus call --session --dest org.gnome.SettingsDaemon.Power --object-path /org/gnome/SettingsDaemon/Power --method org.gnome.SettingsDaemon.Power.Screen.StepDown",
                 verification_rule="exit_code == 0",
             ),
             VerifiedSkill(
