@@ -7,7 +7,44 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
+
+MIGRATION_V2_SQL = """
+-- Task state transitions tracking
+CREATE TABLE IF NOT EXISTS task_transitions (
+    transition_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    reason TEXT,
+    timestamp REAL NOT NULL,
+    FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+);
+
+-- Structured episodic journal entries
+CREATE TABLE IF NOT EXISTS journal_entries (
+    entry_id TEXT PRIMARY KEY,
+    task_id TEXT,
+    step_id TEXT,
+    action_id TEXT,
+    entry_type TEXT NOT NULL,
+    worker TEXT,
+    tool TEXT,
+    status TEXT NOT NULL,
+    duration_ms INTEGER,
+    parameters_json TEXT DEFAULT '{}',
+    result_json TEXT DEFAULT '{}',
+    error TEXT,
+    timestamp REAL NOT NULL,
+    metadata_json TEXT DEFAULT '{}',
+    FOREIGN KEY(task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_transitions_task_id ON task_transitions(task_id);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_task_id ON journal_entries(task_id);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_action_id ON journal_entries(action_id);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_step_id ON journal_entries(step_id);
+"""
 
 MIGRATION_V1_SQL = """
 PRAGMA foreign_keys = ON;
@@ -166,6 +203,7 @@ class Database:
         """Executes ordered transactional migrations up to CURRENT_SCHEMA_VERSION."""
         migrations: dict[int, Callable[[sqlite3.Connection], None]] = {
             1: self._apply_migration_v1,
+            2: self._apply_migration_v2,
         }
 
         current_ver = self.get_schema_version()
@@ -206,6 +244,30 @@ class Database:
     def _apply_migration_v1(self, conn: sqlite3.Connection) -> None:
         """Applies schema v1 statements iteratively within the transaction."""
         for raw_stmt in MIGRATION_V1_SQL.split(";"):
+            stmt = raw_stmt.strip()
+            if stmt:
+                conn.execute(stmt)
+
+    def _apply_migration_v2(self, conn: sqlite3.Connection) -> None:
+        """Applies schema v2 additions: alters plan_steps, actions, and creates journal tables."""
+        cur = conn.execute("PRAGMA table_info(plan_steps);")
+        cols = [r["name"] for r in cur.fetchall()]
+        if "verification_json" not in cols:
+            conn.execute("ALTER TABLE plan_steps ADD COLUMN verification_json TEXT DEFAULT '{}';")
+
+        cur = conn.execute("PRAGMA table_info(actions);")
+        action_cols = [r["name"] for r in cur.fetchall()]
+        if "result_json" not in action_cols:
+            conn.execute("ALTER TABLE actions ADD COLUMN result_json TEXT DEFAULT '{}';")
+        if "error" not in action_cols:
+            conn.execute("ALTER TABLE actions ADD COLUMN error TEXT;")
+
+        cur = conn.execute("PRAGMA table_info(observations);")
+        obs_cols = [r["name"] for r in cur.fetchall()]
+        if "task_id" not in obs_cols:
+            conn.execute("ALTER TABLE observations ADD COLUMN task_id TEXT;")
+
+        for raw_stmt in MIGRATION_V2_SQL.split(";"):
             stmt = raw_stmt.strip()
             if stmt:
                 conn.execute(stmt)

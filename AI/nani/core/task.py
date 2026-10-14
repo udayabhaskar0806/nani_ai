@@ -22,11 +22,44 @@ class TaskStatus(str, Enum):
     PLANNING = "PLANNING"
     RUNNING = "RUNNING"
     WAITING = "WAITING"
+    RECOVERY = "RECOVERY"
     VERIFYING = "VERIFYING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     PAUSED = "PAUSED"
     CANCELLED = "CANCELLED"
+
+
+class InvalidTaskTransition(ValueError):
+    """Raised when an illegal task lifecycle transition is attempted."""
+
+    pass
+
+
+ALLOWED_TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
+    TaskStatus.CREATED: {TaskStatus.PLANNING, TaskStatus.CANCELLED},
+    TaskStatus.PLANNING: {TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.CANCELLED},
+    TaskStatus.RUNNING: {
+        TaskStatus.VERIFYING,
+        TaskStatus.WAITING,
+        TaskStatus.RECOVERY,
+        TaskStatus.PAUSED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.WAITING: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
+    TaskStatus.RECOVERY: {
+        TaskStatus.RUNNING,
+        TaskStatus.PLANNING,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.PAUSED: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
+    TaskStatus.VERIFYING: {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED},
+    TaskStatus.COMPLETED: set(),
+    TaskStatus.FAILED: set(),
+    TaskStatus.CANCELLED: set(),
+}
 
 
 class RiskLevel(str, Enum):
@@ -74,6 +107,8 @@ class Action(BaseModel):
     timestamp: float = Field(default_factory=time.time)
     duration_ms: int | None = None
     status: ActionStatus = ActionStatus.PENDING
+    result: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
 
 
 class Observation(BaseModel):
@@ -95,6 +130,7 @@ class PlanStep(BaseModel):
     risk_level: RiskLevel = RiskLevel.LOW
     actions: list[Action] = Field(default_factory=list)
     observations: list[Observation] = Field(default_factory=list)
+    verification: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     retry_count: int = 0
     max_retries: int = 3
