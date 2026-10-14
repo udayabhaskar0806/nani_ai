@@ -1,6 +1,6 @@
 """N.A.N.I. V2 — Standard Tool Execution Contract
 Every native tool returns this standardized structure.
-Process exit codes are optional and only populated when meaningful (e.g., shell/process tools).
+Process exit codes are optional and only populated when meaningful (e.g., shell/subprocess tools).
 """
 
 from typing import Any
@@ -25,6 +25,7 @@ class ToolResult(BaseModel):
         cls,
         data: dict[str, Any] | None = None,
         stdout: str = "",
+        stderr: str = "",
         exit_code: int | None = None,
         duration_ms: int = 0,
         metadata: dict[str, Any] | None = None,
@@ -33,6 +34,7 @@ class ToolResult(BaseModel):
             success=True,
             data=data or {},
             stdout=stdout,
+            stderr=stderr,
             exit_code=exit_code,
             duration_ms=duration_ms,
             metadata=metadata or {},
@@ -42,6 +44,7 @@ class ToolResult(BaseModel):
     def fail(
         cls,
         error: str,
+        stdout: str = "",
         stderr: str = "",
         exit_code: int | None = None,
         duration_ms: int = 0,
@@ -50,6 +53,7 @@ class ToolResult(BaseModel):
         return cls(
             success=False,
             error=error,
+            stdout=stdout,
             stderr=stderr,
             exit_code=exit_code,
             duration_ms=duration_ms,

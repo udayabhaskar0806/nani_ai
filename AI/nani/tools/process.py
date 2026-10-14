@@ -1,17 +1,26 @@
 """N.A.N.I. V2 — Process Inspection and Control Native Tool
 Provides safe process listing, inspection, spawning, and termination.
-Strictly protects NANI runtime and init processes from termination.
+Strictly scopes process termination to task-owned processes and protects runtime processes.
 """
 
 import asyncio
 import os
+import signal
 from pathlib import Path
 from typing import Any
 
+from nani.core.context import ExecutionContext
 from nani.core.task import RiskLevel, WorkerCapability
-from nani.tools.filesystem import resolve_safe_path
+from nani.tools.path_utils import resolve_safe_path
 from nani.tools.registry import BaseTool, ToolRegistry
 from nani.tools.result import ToolResult
+from nani.tools.supervisor import process_registry
+
+ALLOWED_SIGNALS = {
+    int(signal.SIGTERM): "SIGTERM",
+    int(signal.SIGKILL): "SIGKILL",
+    int(signal.SIGINT): "SIGINT",
+}
 
 
 class ProcessTool(BaseTool):
@@ -53,7 +62,7 @@ class ProcessTool(BaseTool):
                 "cwd": {"type": "string", "description": "Working directory for spawned process"},
                 "signal": {
                     "type": "integer",
-                    "description": "Signal number to send",
+                    "description": "Signal number to send (15=SIGTERM, 9=SIGKILL, 2=SIGINT)",
                     "default": 15,
                 },
                 "limit": {
@@ -72,11 +81,19 @@ class ProcessTool(BaseTool):
         return pid <= 1 or pid in (nani_pid, nani_ppid)
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         operation = kwargs.get("operation")
         if not operation:
             return ToolResult.fail("Missing required parameter: 'operation'")
 
         op_name = str(operation).strip().lower()
+
+        if context and context.workspace:
+            ws = context.workspace
+        elif self.workspace_path:
+            ws = self.workspace_path.resolve()
+        else:
+            ws = Path.cwd().resolve()
 
         if op_name == "list_processes":
             return await self._list_processes(int(kwargs.get("limit", 50)))
@@ -90,13 +107,15 @@ class ProcessTool(BaseTool):
             if not cmd:
                 return ToolResult.fail("Missing required parameter 'cmd' for start_process")
             cwd = kwargs.get("cwd") or "."
-            return await self._start_process(str(cmd), str(cwd), kwargs.get("workspace_path"))
+            task_id = context.task_id if context else None
+            return await self._start_process(str(cmd), str(cwd), ws, task_id)
         elif op_name == "terminate_process":
             pid = kwargs.get("pid")
             if pid is None:
                 return ToolResult.fail("Missing required parameter 'pid' for terminate_process")
             sig = int(kwargs.get("signal", 15))
-            return await self._terminate_process(int(pid), sig)
+            task_id = context.task_id if context else None
+            return await self._terminate_process(int(pid), sig, task_id)
         else:
             return ToolResult.fail(f"Unknown process operation: '{operation}'")
 
@@ -110,21 +129,31 @@ class ProcessTool(BaseTool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout_bytes, _ = await proc.communicate()
+            stdout_bytes, stderr_bytes = await proc.communicate()
+            if proc.returncode != 0:
+                stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+                return ToolResult.fail(
+                    f"ps command failed with exit code {proc.returncode}: {stderr_str}"
+                )
+
             lines = stdout_bytes.decode("utf-8", errors="replace").splitlines()
             processes = []
             for line in lines[1 : limit + 1]:
                 parts = line.strip().split(None, 4)
                 if len(parts) >= 5:
-                    processes.append(
-                        {
-                            "pid": int(parts[0]),
-                            "ppid": int(parts[1]),
-                            "comm": parts[2],
-                            "cpu": parts[3],
-                            "mem": parts[4],
-                        }
-                    )
+                    try:
+                        processes.append(
+                            {
+                                "pid": int(parts[0]),
+                                "ppid": int(parts[1]),
+                                "comm": parts[2],
+                                "cpu": parts[3],
+                                "mem": parts[4],
+                            }
+                        )
+                    except ValueError:
+                        continue
+
             return ToolResult.ok(data={"processes": processes, "count": len(processes)})
         except Exception as e:
             return ToolResult.fail(f"Failed to list processes: {e}")
@@ -140,7 +169,13 @@ class ProcessTool(BaseTool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout_bytes, _ = await proc.communicate()
+            stdout_bytes, stderr_bytes = await proc.communicate()
+            if proc.returncode != 0:
+                stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+                return ToolResult.fail(
+                    f"ps info failed with exit code {proc.returncode}: {stderr_str or 'Process not found'}"
+                )
+
             lines = stdout_bytes.decode("utf-8", errors="replace").splitlines()
             if len(lines) < 2:
                 return ToolResult.fail(f"Process {pid} not found.")
@@ -158,10 +193,11 @@ class ProcessTool(BaseTool):
         except Exception as e:
             return ToolResult.fail(f"Failed to get info for PID {pid}: {e}")
 
-    async def _start_process(self, cmd: str, cwd: str, ws_override: str | None) -> ToolResult:
+    async def _start_process(
+        self, cmd: str, cwd: str, workspace: Path, task_id: str | None
+    ) -> ToolResult:
         try:
-            ws = ws_override or self.workspace_path
-            safe_cwd = resolve_safe_path(cwd, ws)
+            safe_cwd = resolve_safe_path(cwd, workspace)
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 cwd=str(safe_cwd),
@@ -169,20 +205,35 @@ class ProcessTool(BaseTool):
                 stderr=asyncio.subprocess.DEVNULL,
                 start_new_session=True,
             )
+            if task_id and proc.pid:
+                process_registry.register(task_id, proc.pid)
             return ToolResult.ok(data={"pid": proc.pid, "command": cmd, "cwd": str(safe_cwd)})
         except PermissionError as pe:
             return ToolResult.fail(str(pe))
         except Exception as e:
             return ToolResult.fail(f"Failed to start process: {e}")
 
-    async def _terminate_process(self, pid: int, sig: int) -> ToolResult:
+    async def _terminate_process(self, pid: int, sig: int, task_id: str | None) -> ToolResult:
         if self._is_protected_pid(pid):
             return ToolResult.fail(
                 f"Refusing to terminate protected NANI or OS runtime process (PID {pid})."
             )
 
+        if sig not in ALLOWED_SIGNALS:
+            return ToolResult.fail(
+                f"Signal {sig} not permitted. Allowed signals: SIGTERM(15), SIGKILL(9), SIGINT(2)."
+            )
+
+        # Enforce task-scoped termination when running within a task context
+        if task_id and not process_registry.is_owned_by_task(task_id, pid):
+            return ToolResult.fail(
+                f"Access denied: PID {pid} is not owned by task '{task_id}'. Process control is strictly task-scoped."
+            )
+
         try:
             os.kill(pid, sig)
+            if task_id:
+                process_registry.unregister(task_id, pid)
             return ToolResult.ok(data={"pid": pid, "signal": sig, "status": "signal_sent"})
         except ProcessLookupError:
             return ToolResult.fail(f"Process {pid} does not exist.")

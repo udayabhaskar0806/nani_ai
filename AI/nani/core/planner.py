@@ -1,6 +1,6 @@
 """N.A.N.I. V2 — Minimal Deterministic Planner
 Generates structured, verifiable PlanSteps for task execution without external AI dependencies.
-Validates execution mechanics deterministically.
+Strictly rejects unsupported goals instead of completing via fake fallbacks.
 """
 
 import uuid
@@ -36,10 +36,15 @@ int main(void) {
         predefined_steps: list[PlanStep] | None = None,
         task_metadata: dict[str, Any] | None = None,
     ) -> list[PlanStep]:
-        """Generates a deterministic plan for the given goal."""
+        """Generates a deterministic plan for the given goal or validates predefined steps."""
         if predefined_steps:
             steps: list[PlanStep] = []
             for idx, s in enumerate(predefined_steps, start=1):
+                # Phase 1 invariant: exactly one executable action per step
+                if len(s.actions) > 1:
+                    raise ValueError(
+                        f"Step {s.order} has {len(s.actions)} actions. Phase 1 requires exactly one executable action per step."
+                    )
                 s.order = idx
                 if not s.step_id:
                     s.step_id = str(uuid.uuid4())
@@ -128,22 +133,7 @@ int main(void) {
 
             return [step1, step2, step3, step4]
 
-        # Generic single-step fallback plan
-        return [
-            PlanStep(
-                order=1,
-                description=f"Execute deterministic task: {goal}",
-                capability_required=WorkerCapability.SYSTEM,
-                risk_level=RiskLevel.LOW,
-                status=StepStatus.PENDING,
-                verification={"type": "tool_success"},
-                actions=[
-                    Action(
-                        worker="system_worker",
-                        tool="shell",
-                        parameters={"command": meta.get("command", "echo 'NANI_OK'")},
-                        status=ActionStatus.PENDING,
-                    )
-                ],
-            )
-        ]
+        # Explicit goal rejection: Do NOT complete unsupported objectives with echo fallback
+        raise ValueError(
+            f"UNSUPPORTED_GOAL: Objective '{goal}' is not supported in Phase 1 deterministic planner."
+        )

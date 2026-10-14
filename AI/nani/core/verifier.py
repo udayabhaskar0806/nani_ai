@@ -1,6 +1,6 @@
 """N.A.N.I. V2 — Minimal Evidence-Based Verifier
 Validates execution results against strict empirical criteria (exit code, file existence, content match).
-No LLM calls, strictly deterministic evidence evaluation.
+No LLM calls, strictly deterministic evidence evaluation and task final-invariant checking.
 """
 
 from pathlib import Path
@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from nani.core.task import PlanStep, StepStatus, Task
-from nani.tools.filesystem import resolve_safe_path
+from nani.tools.path_utils import resolve_safe_path
 from nani.tools.result import ToolResult
 
 
@@ -45,7 +45,6 @@ class Verifier:
                 failures.append(f"Tool execution failed: {result.error or result.stderr}")
 
         if not criteria:
-            # Default to checking ToolResult success if no explicit criteria given
             is_ok = len(failures) == 0 and (result is None or result.success)
             return VerificationResult(
                 verified=is_ok,
@@ -152,7 +151,7 @@ class Verifier:
     def verify_task(
         self, task: Task, workspace_path: Path | str | None = None
     ) -> VerificationResult:
-        """Verifies that all plan steps are marked COMPLETED and non-failed."""
+        """Verifies that all plan steps are COMPLETED and that task-level final invariants hold."""
         failures: list[str] = []
         checked: list[dict[str, Any]] = []
 
@@ -162,6 +161,9 @@ class Verifier:
                 failure_reasons=["Task plan is empty."],
             )
 
+        ws = Path(workspace_path or task.workspace_path).resolve()
+
+        # 1. Step completion check
         for step in task.plan:
             step_ok = step.status == StepStatus.COMPLETED
             if not step_ok:
@@ -170,11 +172,24 @@ class Verifier:
                 )
             checked.append({"step_id": step.step_id, "order": step.order, "passed": step_ok})
 
+        # 2. Re-verify durable file invariants: if a later action invalidated an artifact, fail!
+        for step in task.plan:
+            crit = step.verification or {}
+            crit_type = crit.get("type")
+            if crit_type in ("file_content", "file_exists"):
+                invariant_res = self.verify_step(step, workspace_path=ws)
+                if not invariant_res.verified:
+                    failures.append(
+                        f"Final artifact invariant invalidated for step {step.order}: {'; '.join(invariant_res.failure_reasons)}"
+                    )
+                    checked.append({"step_id": step.step_id, "final_invariant_passed": False})
+
         return VerificationResult(
             verified=len(failures) == 0,
             criteria_checked=checked,
             failure_reasons=failures,
             evidence={
-                "completed_steps": len([s for s in task.plan if s.status == StepStatus.COMPLETED])
+                "completed_steps": len([s for s in task.plan if s.status == StepStatus.COMPLETED]),
+                "workspace": str(ws),
             },
         )

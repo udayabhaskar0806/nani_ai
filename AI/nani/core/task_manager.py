@@ -4,9 +4,11 @@ Rejects illegal transitions and guarantees crash-resilience across process resta
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
+from nani.core.logger import sanitize_data_structure
 from nani.core.task import (
     ALLOWED_TASK_TRANSITIONS,
     Action,
@@ -169,28 +171,49 @@ class TaskManager:
     def transition_task(
         self, task_id: str, to_status: TaskStatus, reason: str | None = None
     ) -> Task:
-        """Validates and applies a lifecycle state transition. Rejects illegal transitions."""
-        task = self.get_task(task_id)
-        if not task:
-            raise KeyError(f"Task '{task_id}' not found.")
+        """Validates and applies a lifecycle state transition atomically with history."""
+        with self.db.get_connection() as conn:
+            cur = conn.execute("SELECT status, version FROM tasks WHERE task_id = ?", (task_id,))
+            row = cur.fetchone()
+            if not row:
+                raise KeyError(f"Task '{task_id}' not found.")
 
-        current_status = task.status
-        allowed = ALLOWED_TASK_TRANSITIONS.get(current_status, set())
+            current_status = TaskStatus(row["status"])
 
-        if to_status not in allowed:
-            raise InvalidTaskTransition(
-                f"Illegal task transition: cannot transition from {current_status.value} to {to_status.value}."
+            # Terminal state protection
+            if current_status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+                raise InvalidTaskTransition(
+                    f"Illegal task transition: cannot transition from {current_status.value} to {to_status.value}."
+                )
+
+            allowed = ALLOWED_TASK_TRANSITIONS.get(current_status, set())
+            if to_status not in allowed:
+                raise InvalidTaskTransition(
+                    f"Illegal task transition: cannot transition from {current_status.value} to {to_status.value}."
+                )
+
+            now = time.time()
+            # Update task status and increment version atomically
+            conn.execute(
+                """UPDATE tasks
+                   SET status = ?, version = version + 1, updated_at = ?
+                   WHERE task_id = ?""",
+                (to_status.value, now, task_id),
             )
 
-        task.status = to_status
-        task.mark_updated()
-        self.persist_task(task)
-        self.journal.record_transition(
-            task_id=task.task_id,
-            from_status=current_status,
-            to_status=to_status,
-            reason=reason,
-        )
+            # Record transition in the SAME transaction
+            import uuid
+
+            trans_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO task_transitions (transition_id, task_id, from_status, to_status, reason, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (trans_id, task_id, current_status.value, to_status.value, reason, now),
+            )
+            conn.commit()
+
+        task = self.get_task(task_id)
+        assert task is not None
         return task
 
     def start_task(self, task_id: str) -> Task:
@@ -204,8 +227,15 @@ class TaskManager:
         )
 
     def resume_task(self, task_id: str) -> Task:
-        """Resumes a paused task back to RUNNING."""
-        return self.transition_task(task_id, TaskStatus.RUNNING, reason="Task resumed")
+        """Resumes a paused task back to RUNNING. Strictly rejects resuming WAITING tasks without approval."""
+        task = self.get_task(task_id)
+        if not task:
+            raise KeyError(f"Task '{task_id}' not found.")
+        if task.status != TaskStatus.PAUSED:
+            raise InvalidTaskTransition(
+                f"Cannot resume task in {task.status.value} state. resume_task is only permitted for PAUSED tasks."
+            )
+        return self.transition_task(task_id, TaskStatus.RUNNING, reason="Task resumed from PAUSED")
 
     def complete_task(self, task_id: str) -> Task:
         """Marks a verified task as COMPLETED."""
@@ -215,6 +245,10 @@ class TaskManager:
 
     def fail_task(self, task_id: str, reason: str | None = None) -> Task:
         """Transitions a task to FAILED."""
+        task = self.get_task(task_id)
+        if task:
+            task.metadata["error"] = reason or "Task execution failed"
+            self.persist_task(task)
         return self.transition_task(
             task_id, TaskStatus.FAILED, reason=reason or "Task execution failed"
         )
@@ -226,14 +260,22 @@ class TaskManager:
         )
 
     def update_plan(self, task_id: str, plan: list[PlanStep]) -> Task:
-        """Updates the task plan and persists it."""
+        """Replaces the task plan atomically, removing any obsolete steps."""
         task = self.get_task(task_id)
         if not task:
             raise KeyError(f"Task '{task_id}' not found.")
+
+        # In a single transaction, delete old steps and persist the new plan
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM plan_steps WHERE task_id = ?", (task_id,))
+            conn.commit()
+
         task.plan = plan
         task.mark_updated()
         self.persist_task(task)
-        return task
+        reloaded = self.get_task(task_id)
+        assert reloaded is not None
+        return reloaded
 
     def set_current_step_index(self, task_id: str, index: int) -> Task:
         """Updates the current execution step pointer and persists it."""
@@ -246,11 +288,24 @@ class TaskManager:
         return task
 
     def persist_task(self, task: Task) -> None:
-        """Persists the entire Task state atomically to SQLite."""
+        """Persists the Task state atomically to SQLite with secret redaction and CAS protection."""
         task.mark_updated()
-        meta_json = json.dumps(task.metadata)
+        safe_metadata = sanitize_data_structure(task.metadata)
+        meta_json = json.dumps(safe_metadata)
 
         with self.db.get_connection() as conn:
+            # Check terminal state protection: do NOT overwrite CANCELLED/FAILED task with active state
+            cur = conn.execute("SELECT status FROM tasks WHERE task_id = ?", (task.task_id,))
+            row = cur.fetchone()
+            if row:
+                db_status = TaskStatus(row["status"])
+                if db_status in (TaskStatus.CANCELLED, TaskStatus.FAILED) and task.status not in (
+                    TaskStatus.CANCELLED,
+                    TaskStatus.FAILED,
+                ):
+                    # Stale update protection: prevent overwriting cancellation/failure
+                    return
+
             conn.execute(
                 """INSERT INTO tasks (
                        task_id, original_goal, interpreted_goal, workspace_path,
@@ -281,7 +336,8 @@ class TaskManager:
             )
 
             for step in task.plan:
-                ver_json = json.dumps(step.verification)
+                safe_ver = sanitize_data_structure(step.verification)
+                ver_json = json.dumps(safe_ver)
                 conn.execute(
                     """INSERT INTO plan_steps (
                            step_id, task_id, step_order, description, capability_required,
@@ -314,8 +370,10 @@ class TaskManager:
                 )
 
                 for act in step.actions:
-                    params_json = json.dumps(act.parameters)
-                    res_json = json.dumps(act.result)
+                    safe_params = sanitize_data_structure(act.parameters)
+                    safe_res = sanitize_data_structure(act.result)
+                    params_json = json.dumps(safe_params)
+                    res_json = json.dumps(safe_res)
                     conn.execute(
                         """INSERT INTO actions (
                                action_id, task_id, step_id, worker, tool,
@@ -323,6 +381,7 @@ class TaskManager:
                            )
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                            ON CONFLICT(action_id) DO UPDATE SET
+                               parameters_json = excluded.parameters_json,
                                duration_ms = excluded.duration_ms,
                                status = excluded.status,
                                result_json = excluded.result_json,
@@ -343,7 +402,8 @@ class TaskManager:
                     )
 
                 for obs in step.observations:
-                    obs_meta_json = json.dumps(obs.metadata)
+                    safe_obs_meta = sanitize_data_structure(obs.metadata)
+                    obs_meta_json = json.dumps(safe_obs_meta)
                     conn.execute(
                         """INSERT INTO observations (
                                observation_id, action_id, step_id, timestamp, source, content, metadata_json

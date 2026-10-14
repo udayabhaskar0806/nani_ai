@@ -17,13 +17,18 @@ class ModelRouter:
         self._capability_map: dict[ModelCapability, list[tuple[int, str]]] = defaultdict(list)
 
     def register_provider(self, provider: ModelProvider, priority: int = 0) -> None:
-        """Registers a model provider and maps its supported capabilities."""
-        self._providers[provider.name] = provider
-        for cap in provider.supported_capabilities:
-            # Remove any existing entry for this provider under cap
+        """Registers a model provider and maps its supported capabilities.
+
+        Cleans up any previous capability associations for this provider name to prevent stale routes.
+        """
+        # Purge provider name from all existing capability mappings
+        for cap in list(self._capability_map.keys()):
             self._capability_map[cap] = [
                 entry for entry in self._capability_map[cap] if entry[1] != provider.name
             ]
+
+        self._providers[provider.name] = provider
+        for cap in provider.supported_capabilities:
             self._capability_map[cap].append((priority, provider.name))
             self._capability_map[cap].sort(key=lambda x: x[0], reverse=True)
 
@@ -54,10 +59,15 @@ class ModelRouter:
         return None
 
     def get_fallback_provider(
-        self, capability: ModelCapability, failed_provider_name: str
+        self,
+        capability: ModelCapability,
+        failed_provider_name: str,
+        attempted: set[str] | None = None,
     ) -> ModelProvider | None:
         """Selects the next available provider supporting the capability when primary fails."""
-        return self.get_provider_for_capability(capability, exclude={failed_provider_name})
+        exclusions = set(attempted or set())
+        exclusions.add(failed_provider_name)
+        return self.get_provider_for_capability(capability, exclude=exclusions)
 
     async def provider_health(self, name: str) -> bool:
         """Checks if a registered provider is healthy and available."""

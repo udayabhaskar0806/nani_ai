@@ -1,6 +1,12 @@
 """N.A.N.I. V2 — Core Execution Subsystem"""
 
-from nani.core.logger import StructuredLogger, logger, redact_sensitive_data
+from nani.core.context import ExecutionContext
+from nani.core.logger import (
+    StructuredLogger,
+    logger,
+    redact_sensitive_data,
+    sanitize_data_structure,
+)
 from nani.core.orchestrator import Orchestrator
 from nani.core.planner import Planner
 from nani.core.recovery import RecoveryManager
@@ -23,6 +29,7 @@ from nani.core.task_manager import TaskManager
 from nani.core.verifier import VerificationResult, Verifier
 
 __all__ = [
+    "ExecutionContext",
     "Task",
     "TaskStatus",
     "PlanStep",
@@ -49,4 +56,5 @@ __all__ = [
     "StructuredLogger",
     "logger",
     "redact_sensitive_data",
+    "sanitize_data_structure",
 ]

@@ -1,6 +1,6 @@
 """N.A.N.I. V2 — Structured Filesystem Native Tools
 Provides safe, boundary-enforced file and directory manipulation.
-Strictly forbids path traversal outside the authorized workspace.
+Strictly forbids path traversal and symlink escapes outside the authorized workspace.
 """
 
 import fnmatch
@@ -9,30 +9,19 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from nani.core.context import ExecutionContext
 from nani.core.task import RiskLevel, WorkerCapability
+from nani.tools.path_utils import compute_effective_destination, resolve_safe_path
 from nani.tools.registry import BaseTool, ToolRegistry
 from nani.tools.result import ToolResult
 
 
-def resolve_safe_path(path: str | Path, workspace_path: str | Path | None = None) -> Path:
-    """Normalizes and verifies that the target path resides within the authorized workspace.
-
-    Raises PermissionError if path traversal escapes the workspace.
-    """
-    ws = Path(workspace_path or Path.cwd()).resolve()
-    target = Path(path)
-    if not target.is_absolute():
-        resolved = (ws / target).resolve()
-    else:
-        resolved = target.resolve()
-
-    try:
-        resolved.relative_to(ws)
-    except ValueError:
-        raise PermissionError(
-            f"Access denied: path '{path}' is outside authorized workspace '{ws}'."
-        ) from None
-    return resolved
+def _get_effective_workspace(context: ExecutionContext | None, default_ws: Path | None) -> Path:
+    if context and context.workspace:
+        return context.workspace
+    if default_ws:
+        return default_ws.resolve()
+    return Path.cwd().resolve()
 
 
 class ReadFileTool(BaseTool):
@@ -66,17 +55,15 @@ class ReadFileTool(BaseTool):
                 },
                 "offset": {"type": "integer", "description": "Byte offset", "default": 0},
                 "limit": {"type": "integer", "description": "Maximum bytes to read"},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
             "required": ["path"],
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", ""))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             target = resolve_safe_path(path_str, ws)
             if not target.is_file():
@@ -135,20 +122,23 @@ class WriteFileTool(BaseTool):
                 },
                 "content": {"type": "string", "description": "Text content to write"},
                 "create_dirs": {"type": "boolean", "default": True},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
             "required": ["path", "content"],
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", ""))
         content = str(kwargs.get("content", ""))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             target = resolve_safe_path(path_str, ws)
+            if target.is_symlink() or os.path.islink(str(target)):
+                raise PermissionError(
+                    f"Access denied: cannot write through destination symlink '{path_str}'."
+                )
+
             if kwargs.get("create_dirs", True):
                 target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -190,23 +180,23 @@ class PatchFileTool(BaseTool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Target file path"},
-                "search": {"type": "string", "description": "Exact text or regex pattern to match"},
+                "search": {"type": "string", "description": "Exact text to match"},
                 "replace": {"type": "string", "description": "Replacement text"},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
             "required": ["path", "search", "replace"],
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", ""))
         search_str = str(kwargs.get("search", ""))
         replace_str = str(kwargs.get("replace", ""))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             target = resolve_safe_path(path_str, ws)
+            if target.is_symlink():
+                raise PermissionError("Access denied: cannot patch a symlink directly.")
             if not target.is_file():
                 return ToolResult.fail(f"File not found for patching: {path_str}")
 
@@ -255,16 +245,14 @@ class ListDirectoryTool(BaseTool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Directory path", "default": "."},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", "."))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             target = resolve_safe_path(path_str, ws)
             if not target.is_dir():
@@ -323,17 +311,15 @@ class SearchFilesTool(BaseTool):
                     "description": "Glob pattern (e.g. *.c)",
                     "default": "*",
                 },
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", "."))
         pattern = str(kwargs.get("pattern", "*"))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             target = resolve_safe_path(path_str, ws)
             if not target.is_dir():
@@ -380,17 +366,15 @@ class FileExistsTool(BaseTool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Path to check"},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
             "required": ["path"],
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", ""))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             target = resolve_safe_path(path_str, ws)
             exists = target.exists()
@@ -434,17 +418,15 @@ class CreateDirectoryTool(BaseTool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Directory path to create"},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
             "required": ["path"],
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", ""))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             target = resolve_safe_path(path_str, ws)
             target.mkdir(parents=True, exist_ok=True)
@@ -482,26 +464,27 @@ class CopyTool(BaseTool):
             "properties": {
                 "src": {"type": "string", "description": "Source path"},
                 "dst": {"type": "string", "description": "Destination path"},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
             "required": ["src", "dst"],
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         src_str = str(kwargs.get("src", ""))
         dst_str = str(kwargs.get("dst", ""))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             src = resolve_safe_path(src_str, ws)
-            dst = resolve_safe_path(dst_str, ws)
+            dst_target = resolve_safe_path(dst_str, ws)
             if not src.is_file():
                 return ToolResult.fail(f"Source file not found: {src_str}")
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            return ToolResult.ok(data={"src": str(src), "dst": str(dst)})
+
+            # Compute effective destination and protect against symlink escapes
+            effective_dst = compute_effective_destination(src, dst_target, ws)
+            effective_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, effective_dst, follow_symlinks=False)
+            return ToolResult.ok(data={"src": str(src), "dst": str(effective_dst)})
         except PermissionError as pe:
             return ToolResult.fail(str(pe))
         except Exception as e:
@@ -535,26 +518,26 @@ class MoveTool(BaseTool):
             "properties": {
                 "src": {"type": "string", "description": "Source path"},
                 "dst": {"type": "string", "description": "Destination path"},
-                "workspace_path": {
-                    "type": "string",
-                    "description": "Optional workspace root override",
-                },
             },
             "required": ["src", "dst"],
         }
 
     async def run(self, **kwargs: Any) -> ToolResult:
+        context: ExecutionContext | None = kwargs.pop("context", None)
         src_str = str(kwargs.get("src", ""))
         dst_str = str(kwargs.get("dst", ""))
-        ws = kwargs.get("workspace_path") or self.workspace_path
+        ws = _get_effective_workspace(context, self.workspace_path)
+
         try:
             src = resolve_safe_path(src_str, ws)
-            dst = resolve_safe_path(dst_str, ws)
+            dst_target = resolve_safe_path(dst_str, ws)
             if not src.exists():
                 return ToolResult.fail(f"Source not found: {src_str}")
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(src, dst)
-            return ToolResult.ok(data={"src": str(src), "dst": str(dst)})
+
+            effective_dst = compute_effective_destination(src, dst_target, ws)
+            effective_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(src, effective_dst)
+            return ToolResult.ok(data={"src": str(src), "dst": str(effective_dst)})
         except PermissionError as pe:
             return ToolResult.fail(str(pe))
         except Exception as e:

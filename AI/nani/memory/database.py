@@ -2,6 +2,7 @@
 Provides SQLite storage with WAL mode, foreign keys, query indexes, and transactional schema migrations.
 """
 
+import os
 import sqlite3
 import time
 from collections.abc import Callable
@@ -174,7 +175,19 @@ class Database:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or Path("data/nani_v2.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Apply restrictive storage permissions
+        try:
+            os.chmod(str(self.db_path.parent), 0o700)
+            if self.db_path.exists():
+                os.chmod(str(self.db_path), 0o600)
+        except Exception:
+            pass
         self.run_migrations()
+        try:
+            if self.db_path.exists():
+                os.chmod(str(self.db_path), 0o600)
+        except Exception:
+            pass
 
     def get_connection(self) -> sqlite3.Connection:
         """Creates a connection with WAL mode and foreign keys enabled."""
@@ -250,6 +263,11 @@ class Database:
 
     def _apply_migration_v2(self, conn: sqlite3.Connection) -> None:
         """Applies schema v2 additions: alters plan_steps, actions, and creates journal tables."""
+        cur = conn.execute("PRAGMA table_info(tasks);")
+        task_cols = [r["name"] for r in cur.fetchall()]
+        if "version" not in task_cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER DEFAULT 1;")
+
         cur = conn.execute("PRAGMA table_info(plan_steps);")
         cols = [r["name"] for r in cur.fetchall()]
         if "verification_json" not in cols:

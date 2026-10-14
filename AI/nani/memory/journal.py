@@ -8,27 +8,20 @@ import uuid
 from typing import Any
 
 from nani.core.logger import logger as global_logger
-from nani.core.logger import redact_sensitive_data
+from nani.core.logger import redact_sensitive_data, sanitize_data_structure
 from nani.core.task import ActionStatus, RiskLevel, TaskStatus
 from nani.memory.database import Database
 
 
 class ActionJournal:
-    """Episodic execution journal providing tamper-evident and secret-redacted execution history."""
+    """Structured append-only episodic execution journal providing sanitized execution history."""
 
     def __init__(self, db: Database | None = None) -> None:
         self.db = db or Database()
 
     def _sanitize_data(self, data: Any) -> Any:
         """Recursively stringifies and redacts sensitive information."""
-        if data is None:
-            return None
-        try:
-            raw = json.dumps(data)
-            clean = redact_sensitive_data(raw)
-            return json.loads(clean)
-        except Exception:
-            return redact_sensitive_data(str(data))
+        return sanitize_data_structure(data)
 
     def record_action_start(
         self,
@@ -114,7 +107,6 @@ class ActionJournal:
         res_json = json.dumps(safe_res)
 
         with self.db.get_connection() as conn:
-            # Query parent action metadata if not provided
             if not (task_id and worker and tool):
                 cur = conn.execute(
                     "SELECT task_id, step_id, worker, tool FROM actions WHERE action_id = ?",
@@ -176,7 +168,7 @@ class ActionJournal:
         """Records empirical sensory or output evidence gathered during task execution."""
         obs_id = str(uuid.uuid4())
         now = time.time()
-        safe_content = redact_sensitive_data(content)
+        safe_content = redact_sensitive_data(content[:50_000])
         safe_meta = self._sanitize_data(metadata or {})
         meta_json = json.dumps(safe_meta)
 
@@ -316,12 +308,21 @@ class ActionJournal:
         action_description: str,
         risk_level: RiskLevel,
     ) -> str:
-        """Logs an escalation gate requiring creator confirmation."""
-        approval_id = str(uuid.uuid4())
+        """Logs an escalation gate requiring creator confirmation, deduplicating active pending requests."""
         now = time.time()
         safe_desc = redact_sensitive_data(action_description)
 
         with self.db.get_connection() as conn:
+            # Check for existing pending approval request to deduplicate
+            cur = conn.execute(
+                "SELECT approval_id FROM approvals WHERE task_id = ? AND action_description = ? AND status = 'PENDING'",
+                (task_id, safe_desc),
+            )
+            existing = cur.fetchone()
+            if existing:
+                return str(existing["approval_id"])
+
+            approval_id = str(uuid.uuid4())
             conn.execute(
                 """INSERT INTO approvals (approval_id, task_id, step_id, action_description, risk_level, status, requested_at)
                    VALUES (?, ?, ?, ?, ?, 'PENDING', ?)""",

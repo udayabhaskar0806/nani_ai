@@ -12,9 +12,9 @@ from nani.tools.filesystem import (
     SearchFilesTool,
     WriteFileTool,
     register_filesystem_tools,
-    resolve_safe_path,
 )
 from nani.tools.git import GitTool, register_git_tools
+from nani.tools.path_utils import compute_effective_destination, resolve_safe_path
 from nani.tools.process import ProcessTool, register_process_tools
 from nani.tools.registry import BaseTool, DuplicateToolError, ToolRegistry
 from nani.tools.result import ToolResult
@@ -26,6 +26,7 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "resolve_safe_path",
+    "compute_effective_destination",
     "ReadFileTool",
     "WriteFileTool",
     "PatchFileTool",
