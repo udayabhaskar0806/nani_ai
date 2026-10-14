@@ -127,18 +127,36 @@ class MachineGrounding:
         candidates = ("apt", "snap", "flatpak", "pacman", "dnf", "zypper", "apk", "brew")
         return [mgr for mgr in candidates if shutil.which(mgr)]
 
+    _sudo_override: bool | str | None = None
+
     @classmethod
-    def get_sudo_status(cls) -> str:
-        """Determines if the current user has non-interactive passwordless sudo."""
+    def override_sudo_status(cls, status: bool | str | None) -> None:
+        """Overrides detected sudo status when session credentials are authorized."""
+        cls._sudo_override = status
+
+    @classmethod
+    def check_sudo_privilege(cls) -> bool:
+        """Returns True if the machine has active non-interactive passwordless sudo."""
         import subprocess
 
         try:
             res = subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=1.0)
-            if res.returncode == 0:
-                return "Passwordless sudo available"
-            return "Password required (non-interactive sudo unavailable)"
+            return res.returncode == 0
         except Exception:
-            return "Sudo not available or restricted"
+            return False
+
+    @classmethod
+    def get_sudo_status(cls) -> str:
+        """Determines if the current user has non-interactive passwordless sudo or in-session credentials."""
+        if cls._sudo_override is True:
+            return "Autonomous sudo authorized (in-session credentials active)"
+        if isinstance(cls._sudo_override, str):
+            return cls._sudo_override
+        if cls._sudo_override is False:
+            return "Password required (non-interactive sudo unavailable)"
+        if cls.check_sudo_privilege():
+            return "Passwordless sudo available"
+        return "Password required (non-interactive sudo unavailable)"
 
     @classmethod
     def get_snapshot(cls) -> dict[str, Any]:

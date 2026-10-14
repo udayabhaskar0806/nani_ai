@@ -18,6 +18,7 @@ from nani.core.context import ExecutionContext
 from nani.core.grounding import MachineGrounding
 from nani.core.intent import IntentClassifier, UserIntent
 from nani.core.orchestrator import Orchestrator
+from nani.core.sudo import SudoManager
 from nani.core.task import TaskStatus
 from nani.core.task_manager import TaskManager
 from nani.memory.skills import SkillStore
@@ -77,6 +78,19 @@ class InteractiveCLI:
         providers = self.model_router.list_providers()
         prov_names = [p.name for p in providers] or ["offline (none configured)"]
         table.add_row("Model Router", "ONLINE", f"Configured: {', '.join(prov_names)}")
+
+        sudo_stat = "AUTONOMOUS ROOT" if SudoManager.is_authorized() else "STANDARD USER"
+        sudo_stat_color = "bold green" if SudoManager.is_authorized() else "yellow"
+        sudo_desc = (
+            "Session password active"
+            if SudoManager.get_session_password()
+            else (
+                "Passwordless sudo available"
+                if MachineGrounding.check_sudo_privilege()
+                else "Password required (run 'auth' to grant)"
+            )
+        )
+        table.add_row("Privilege", f"[{sudo_stat_color}]{sudo_stat}[/{sudo_stat_color}]", sudo_desc)
 
         self.console.print(table)
 
@@ -290,7 +304,104 @@ class InteractiveCLI:
             }
         ]
 
+    async def authorize_sudo(self) -> bool:
+        """Securely prompts for sudo credentials, verifies them, and registers them in volatile memory."""
+        self.console.print("\n[bold cyan]🔐 Sudo Access Authorization[/bold cyan]")
+        self.console.print(
+            "[dim]Enter your Linux user password to authorize autonomous administrative tasks for NANI.\n"
+            "Your password is held strictly in volatile RAM for this session and is never logged or saved to disk.[/dim]"
+        )
+        import getpass
+
+        try:
+            pwd = await asyncio.to_thread(getpass.getpass, "Password for sudo: ")
+        except (KeyboardInterrupt, EOFError):
+            self.console.print("\n[yellow]Authorization cancelled.[/yellow]\n")
+            return False
+
+        if not pwd:
+            self.console.print("[yellow]Authorization cancelled (empty password).[/yellow]\n")
+            return False
+
+        with self.console.status("[bold cyan]Verifying sudo credentials...[/bold cyan]"):
+            ok = await SudoManager.authorize(pwd)
+
+        if ok:
+            self.console.print(
+                "[bold green]✓ Sudo access authorized successfully for this session![/bold green]\n"
+                "[dim]NANI can now autonomously install software, update packages, and run administrative tasks.\n"
+                "Tip: Run 'sudo permanent' if you want permanent passwordless execution without prompting next time.[/dim]\n"
+            )
+            return True
+        else:
+            self.console.print(
+                "[bold red]✗ Sudo authentication failed: Incorrect password.[/bold red]\n"
+            )
+            return False
+
+    async def setup_permanent_sudo(self) -> bool:
+        """Configures /etc/sudoers.d/nani-sudo for permanent passwordless execution."""
+        self.console.print("\n[bold cyan]⚙ Configuring Permanent Autonomous Sudo[/bold cyan]")
+        if not SudoManager.is_authorized():
+            self.console.print(
+                "[yellow]Sudo credentials required to configure permanent access.[/yellow]"
+            )
+            ok = await self.authorize_sudo()
+            if not ok:
+                return False
+
+        with self.console.status(
+            "[bold cyan]Writing /etc/sudoers.d/nani-sudo (visudo syntax checked)...[/bold cyan]"
+        ):
+            success, msg = await SudoManager.configure_permanent_sudo()
+
+        if success:
+            self.console.print(f"[bold green]✓ {msg}[/bold green]\n")
+            return True
+        else:
+            self.console.print(f"[bold red]✗ {msg}[/bold red]\n")
+            return False
+
+    async def revoke_sudo(self) -> None:
+        """Revokes session and permanent sudo privileges."""
+        SudoManager.clear()
+        if MachineGrounding.check_sudo_privilege():
+            with self.console.status(
+                "[bold cyan]Removing permanent sudo configuration...[/bold cyan]"
+            ):
+                await SudoManager.remove_permanent_sudo()
+        self.console.print(
+            "[bold yellow]✓ Sudo authorization revoked. NANI is now running as standard user.[/bold yellow]\n"
+        )
+
     async def ask_model(self, prompt: str) -> None:
+        lower_prompt = prompt.strip().lower()
+
+        # Natural language authorization intent check
+        if any(
+            phrase in lower_prompt
+            for phrase in (
+                "i will give access",
+                "i'll give access",
+                "give access",
+                "grant access",
+                "grant sudo",
+                "authorize sudo",
+                "give you access",
+                "give u access",
+                "grant root",
+                "authorize root",
+            )
+        ) and not any(k in lower_prompt for k in ("how to", "why", "what is", "explain")):
+            ok = await self.authorize_sudo()
+            if ok:
+                self.console.print(
+                    "[bold cyan]NANI:[/bold cyan]\n"
+                    "Thank you! Autonomous sudo access is active for this session. "
+                    "What would you like me to install or configure for you? (e.g. 'install chrome')\n"
+                )
+            return
+
         # Step 1: Fast-Path Skill Check (2-5ms execution, zero tokens)
         snap = MachineGrounding.get_snapshot()
         matched_skill = self.skill_store.find_matching_skill(prompt, grounding_snap=snap)
@@ -305,7 +416,10 @@ class InteractiveCLI:
             ctx = ExecutionContext(
                 task_id="cli_fast_skill",
                 workspace=Path.cwd().resolve(),
-                metadata={"allow_unsandboxed": True},
+                metadata={
+                    "allow_unsandboxed": True,
+                    "sudo_password": SudoManager.get_session_password(),
+                },
             )
             tool_res = await self.registry.execute("shell", {"command": cmd}, context=ctx)
             out = (tool_res.stdout or tool_res.stderr or "").strip()
@@ -352,20 +466,27 @@ class InteractiveCLI:
 
         elif intent == UserIntent.SYSTEM:
             grounding_context = MachineGrounding.format_grounding_prompt()
+            privilege_mode = (
+                "AUTONOMOUS ROOT / SUDO ACTIVE: You are fully authorized to execute administrative and installation commands autonomously with sudo (e.g. sudo apt update && sudo apt install -y ..., sudo dpkg -i ..., sudo snap install ...)."
+                if SudoManager.is_authorized()
+                else "STANDARD USER: Sudo commands require password authorization. Do NOT guess passwords. Explain the command clearly for the user or prompt them: 'Type auth or grant access to let me install it autonomously.'"
+            )
             system_instruction = (
                 "You are N.A.N.I., an autonomous AI engineer and personal assistant running locally on the user's Linux machine.\n"
                 "You have access to native tools: 'shell', 'web_search', and 'read_file'.\n"
                 f"{grounding_context}\n"
+                f"CURRENT PRIVILEGE STATUS: {privilege_mode}\n"
                 "SYSTEM EXECUTION PRINCIPLES:\n"
                 "1. VERIFY EXECUTABLES BEFORE CLAIMING SUCCESS:\n"
                 "   - When asked to run or launch an application, verify its presence on $PATH before execution or reporting success.\n"
-                "   - If an application is not installed, inform the user honestly and provide instructions using the detected package manager.\n"
+                "   - If an application is not installed, inform the user honestly, or proceed with autonomous installation if sudo is authorized.\n"
                 "   - Launch GUI applications cleanly detached in the background.\n"
                 "2. PRIVILEGE & SUDO REASONING:\n"
-                "   - Check the detected privilege level from the Ground Truth context.\n"
-                "   - If an operation requires root permissions and passwordless sudo is unavailable:\n"
-                "     Do NOT execute sudo commands non-interactively in the background.\n"
-                "     Explain the required command clearly for the user to run in their own terminal.\n"
+                "   - If autonomous root/sudo is active:\n"
+                "     Execute the necessary package manager or installer commands autonomously (e.g. download deb package, sudo apt update, sudo apt install -y, or sudo snap install).\n"
+                "     After installation, verify the binary is installed (e.g. 'which <bin>') before reporting completion.\n"
+                "   - If standard user without sudo privilege is detected:\n"
+                "     Do NOT run sudo commands in the background. Explain the commands or prompt the user: 'Run auth or grant access to let me install it for you.'\n"
                 "   - Never attempt to guess, inject, or brute-force user passwords.\n"
                 "3. INTEGRITY & NO SUBSTITUTION:\n"
                 "   - Never launch, install, or substitute alternative applications without explicit user confirmation.\n"
@@ -416,7 +537,7 @@ class InteractiveCLI:
                     if fn_name == "shell":
                         cmd = str(fn_args.get("command", "")).strip()
 
-                        # Hard Security Guard: Automated password guessing / sudo -S is prohibited
+                        # Hard Security Guard: Automated password guessing / echo 'pwd' | sudo -S is prohibited
                         if re.search(r"echo\s+['\"].*?['\"]\s*\|\s*sudo\s+-S", cmd, re.IGNORECASE):
                             self.console.print(
                                 "[bold red]🛑 Security Block: Automated password injection into sudo is forbidden.[/bold red]"
@@ -452,7 +573,10 @@ class InteractiveCLI:
                                 ctx = ExecutionContext(
                                     task_id="cli_interactive",
                                     workspace=Path.cwd().resolve(),
-                                    metadata={"allow_unsandboxed": True},
+                                    metadata={
+                                        "allow_unsandboxed": True,
+                                        "sudo_password": SudoManager.get_session_password(),
+                                    },
                                 )
                                 tool_res = await self.registry.execute(
                                     "shell", {"command": cmd}, context=ctx
@@ -476,7 +600,10 @@ class InteractiveCLI:
                             ctx = ExecutionContext(
                                 task_id="cli_interactive",
                                 workspace=Path.cwd().resolve(),
-                                metadata={"allow_unsandboxed": True},
+                                metadata={
+                                    "allow_unsandboxed": True,
+                                    "sudo_password": SudoManager.get_session_password(),
+                                },
                             )
                             tool_res = await self.registry.execute(
                                 "shell", {"command": cmd}, context=ctx
@@ -580,12 +707,20 @@ class InteractiveCLI:
                         "  clear                  Clear conversational memory\n"
                         "  council: <question>    Convene multi-model consensus council (debate & cross-examine)\n"
                         "  learn: <source>        Federated autonomous learning from URL, file, or man page\n"
-                        "  task: <goal>           Execute multi-step goal through autonomous orchestrator\n"
+                        "  auth / grant sudo      Authorize in-session sudo for autonomous root tasks\n"
+                        "  sudo permanent         Configure permanent passwordless sudo (/etc/sudoers.d/nani-sudo)\n"
+                        "  revoke                 Revoke sudo credentials\n"
                         "  <question>             Ask anything (fast-path skills auto-fire in 2ms)\n"
                         "  exit                   Exit NANI CLI\n"
                     )
                 elif line.lower() == "status":
                     self.display_status_table()
+                elif line.lower() in ("auth", "grant sudo", "sudo auth", "authorize sudo"):
+                    await self.authorize_sudo()
+                elif line.lower() in ("sudo permanent", "setup-sudo", "permanent sudo"):
+                    await self.setup_permanent_sudo()
+                elif line.lower() in ("revoke", "deauth", "revoke sudo"):
+                    await self.revoke_sudo()
                 elif line.lower() in ("grounding", "hardware"):
                     self.console.print(
                         Panel(

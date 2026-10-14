@@ -208,10 +208,12 @@ class SubprocessSupervisor:
         isolated: bool = True,
         network_allowed: bool = False,
         allow_unsandboxed: bool = False,
+        stdin_data: bytes | None = None,
     ) -> ToolResult:
-        """Runs a subprocess with full supervision, bounded streaming, and timeout cleanup."""
         t_start = time.monotonic()
-        effective_env = env or cls.get_sanitized_env(workspace)
+        effective_env = cls.get_sanitized_env(workspace)
+        if env:
+            effective_env.update(env)
 
         final_argv = argv
         if isolated:
@@ -233,9 +235,11 @@ class SubprocessSupervisor:
         pgid: int | None = None
 
         try:
+            stdin_mode = asyncio.subprocess.PIPE if stdin_data else None
             proc = await asyncio.create_subprocess_exec(
                 *final_argv,
                 cwd=str(cwd),
+                stdin=stdin_mode,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=effective_env,
@@ -246,6 +250,14 @@ class SubprocessSupervisor:
                 pgid = proc.pid
                 if task_id:
                     process_registry.register(task_id, proc.pid)
+
+            if stdin_data and proc.stdin:
+                try:
+                    proc.stdin.write(stdin_data)
+                    await proc.stdin.drain()
+                    proc.stdin.close()
+                except Exception:
+                    pass
 
             # Concurrently read stdout and stderr with timeout
             stdout_task = asyncio.create_task(cls._read_stream(proc.stdout))  # type: ignore[arg-type]

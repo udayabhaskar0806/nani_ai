@@ -3,6 +3,8 @@ Provides supervised command execution with process-group isolation,
 timeout termination, output buffer limits, and working-directory boundary enforcement.
 """
 
+import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -91,18 +93,58 @@ class ShellTool(BaseTool):
         task_id = context.task_id if context else None
         allow_unsandboxed = bool(context and context.metadata.get("allow_unsandboxed", False))
 
-        # Execute through SubprocessSupervisor with enforceable isolation
-        argv = ["/bin/sh", "-c", command_str]
-        return await SubprocessSupervisor.run_supervised(
-            argv=argv,
-            cwd=safe_cwd,
-            workspace=ws,
-            timeout=timeout,
-            task_id=task_id,
-            isolated=self.isolated,
-            network_allowed=False,
-            allow_unsandboxed=allow_unsandboxed,
+        stdin_param = kwargs.get("stdin")
+        if not stdin_param and context and context.metadata:
+            stdin_param = context.metadata.get("stdin")
+
+        stdin_bytes = (
+            stdin_param.encode()
+            if isinstance(stdin_param, str)
+            else stdin_param
+            if isinstance(stdin_param, bytes)
+            else None
         )
+
+        from nani.core.sudo import SudoManager
+
+        sudo_pwd = (
+            kwargs.get("sudo_password")
+            or (context.metadata.get("sudo_password") if context and context.metadata else None)
+            or SudoManager.get_session_password()
+        )
+
+        askpass_path: Path | None = None
+        custom_env: dict[str, str] = {}
+        if sudo_pwd and re.search(r"\bsudo\b", command_str):
+            allow_unsandboxed = True
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, prefix="nani_askpass_") as tf:
+                tf.write(f"#!/bin/sh\nexec cat << 'NANI_EOF'\n{sudo_pwd}\nNANI_EOF\n")
+                askpass_path = Path(tf.name)
+            askpass_path.chmod(0o700)
+            custom_env["SUDO_ASKPASS"] = str(askpass_path)
+            command_str = re.sub(r"\bsudo\b(?!\s+-[AS])", "sudo -A", command_str)
+
+        try:
+            # Execute through SubprocessSupervisor with enforceable isolation
+            argv = ["/bin/sh", "-c", command_str]
+            return await SubprocessSupervisor.run_supervised(
+                argv=argv,
+                cwd=safe_cwd,
+                workspace=ws,
+                timeout=timeout,
+                env=custom_env or None,
+                task_id=task_id,
+                isolated=self.isolated,
+                network_allowed=False,
+                allow_unsandboxed=allow_unsandboxed,
+                stdin_data=stdin_bytes,
+            )
+        finally:
+            if askpass_path and askpass_path.exists():
+                try:
+                    askpass_path.unlink()
+                except Exception:
+                    pass
 
 
 def register_shell_tools(registry: ToolRegistry, workspace_path: Path | None = None) -> None:
