@@ -92,9 +92,11 @@ class ModelRouter:
     def create_default(cls, config: Any = None) -> "ModelRouter":
         """Instantiates and registers configured model providers with priority ordering."""
         from nani.config import settings
+        from nani.models.providers.deepseek import DeepSeekProvider
         from nani.models.providers.gemini import GeminiProvider
         from nani.models.providers.groq import GroqProvider
         from nani.models.providers.local_ollama import OllamaProvider
+        from nani.models.providers.openrouter import OpenRouterProvider
 
         cfg = config or settings
         router = cls()
@@ -103,9 +105,19 @@ class ModelRouter:
         if gemini_key:
             router.register_provider(GeminiProvider(api_key=gemini_key), priority=100)
 
+        deepseek_key = cfg.get_secret("deepseek_api_key") if hasattr(cfg, "get_secret") else None
+        if deepseek_key:
+            router.register_provider(DeepSeekProvider(api_key=deepseek_key), priority=95)
+
         groq_key = cfg.get_secret("groq_api_key") if hasattr(cfg, "get_secret") else None
         if groq_key:
             router.register_provider(GroqProvider(api_key=groq_key), priority=90)
+
+        openrouter_key = (
+            cfg.get_secret("openrouter_api_key") if hasattr(cfg, "get_secret") else None
+        )
+        if openrouter_key:
+            router.register_provider(OpenRouterProvider(api_key=openrouter_key), priority=85)
 
         # Register local Ollama as local offline fallback
         ollama_url = getattr(cfg, "ollama_base_url", "http://localhost:11434")

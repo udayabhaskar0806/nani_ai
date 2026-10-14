@@ -104,3 +104,65 @@ def test_model_router_create_default():
     # Capabilities map to registered provider
     provider = router.get_provider_for_capability(ModelCapability.FAST)
     assert provider is not None
+
+
+def test_deepseek_provider_initialization_and_model_selection():
+    from nani.models.providers.deepseek import DeepSeekProvider
+
+    provider = DeepSeekProvider(api_key="sk-test-deepseek-123456")
+    assert provider.name == "deepseek"
+    assert ModelCapability.REASONING in provider.supported_capabilities
+    assert ModelCapability.CODING in provider.supported_capabilities
+
+    fast_model = provider._select_model_for_capability(ModelCapability.FAST)
+    reasoning_model = provider._select_model_for_capability(ModelCapability.REASONING)
+    assert "chat" in fast_model
+    assert "reasoner" in reasoning_model
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_rejects_missing_key():
+    from nani.models.providers.deepseek import DeepSeekProvider
+
+    provider = DeepSeekProvider(api_key="")
+    assert await provider.is_available() is False
+
+    req = ModelRequest(
+        capability=ModelCapability.REASONING,
+        messages=[ModelMessage(role="user", content="solve logic puzzle")],
+    )
+    with pytest.raises(ValueError, match="DeepSeek API key is not configured"):
+        await provider.generate(req)
+
+
+def test_openrouter_provider_initialization_and_multimodal_conversion():
+    from nani.models.providers.openrouter import OpenRouterProvider
+
+    provider = OpenRouterProvider(api_key="sk-or-test-123456")
+    assert provider.name == "openrouter"
+    assert ModelCapability.VISION in provider.supported_capabilities
+
+    messages = [
+        ModelMessage(role="user", content="Examine this image", images_base64=["sample_b64"]),
+    ]
+    formatted = provider._convert_messages(messages, system_prompt="You are an analyst.")
+    assert len(formatted) == 2
+    assert formatted[0]["role"] == "system"
+    assert formatted[1]["role"] == "user"
+    assert isinstance(formatted[1]["content"], list)
+    assert formatted[1]["content"][1]["type"] == "image_url"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_provider_rejects_missing_key():
+    from nani.models.providers.openrouter import OpenRouterProvider
+
+    provider = OpenRouterProvider(api_key="")
+    assert await provider.is_available() is False
+
+    req = ModelRequest(
+        capability=ModelCapability.CODING,
+        messages=[ModelMessage(role="user", content="write test")],
+    )
+    with pytest.raises(ValueError, match="OpenRouter API key is not configured"):
+        await provider.generate(req)

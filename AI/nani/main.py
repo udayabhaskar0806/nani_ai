@@ -12,6 +12,7 @@ from nani.core.orchestrator import Orchestrator
 from nani.core.task_manager import TaskManager
 from nani.memory.database import Database
 from nani.memory.journal import ActionJournal
+from nani.tools.document_reader import register_document_tools
 from nani.tools.filesystem import register_filesystem_tools
 from nani.tools.git import register_git_tools
 from nani.tools.process import register_process_tools
@@ -36,6 +37,7 @@ def create_runtime() -> tuple[TaskManager, ToolRegistry, Orchestrator]:
     register_git_tools(registry)
     register_web_tools(registry)
     register_hardware_tools(registry)
+    register_document_tools(registry)
 
     orchestrator = Orchestrator(
         task_manager=task_manager,

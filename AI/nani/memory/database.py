@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 class ConcurrencyError(Exception):
@@ -24,9 +24,49 @@ class MigrationError(Exception):
     pass
 
 
+MIGRATION_V4_SQL = """
+-- Schema v4: Fast-path verified skills & FTS5 full-text search index
+CREATE TABLE IF NOT EXISTS verified_skills (
+    skill_id TEXT PRIMARY KEY,
+    intent_pattern TEXT NOT NULL,
+    description TEXT NOT NULL,
+    preconditions_json TEXT DEFAULT '{}',
+    command_template TEXT NOT NULL,
+    verification_rule TEXT DEFAULT '',
+    success_count INTEGER DEFAULT 1,
+    last_used REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS verified_skills_fts USING fts5(
+    skill_id UNINDEXED,
+    intent_pattern,
+    description,
+    command_template
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_snippets (
+    snippet_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    tags_json TEXT DEFAULT '[]',
+    created_at REAL NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    snippet_id UNINDEXED,
+    title,
+    content,
+    summary
+);
+"""
+
 MIGRATION_V3_SQL = """
 -- Schema v3: Add version column to tasks for Compare-And-Swap (CAS) lifecycle state protection
 """
+
 
 MIGRATION_V2_SQL = """
 -- Task state transitions tracking
@@ -241,6 +281,7 @@ class Database:
             1: self._apply_migration_v1,
             2: self._apply_migration_v2,
             3: self._apply_migration_v3,
+            4: self._apply_migration_v4,
         }
 
         current_ver = self.get_schema_version()
@@ -320,3 +361,10 @@ class Database:
         task_cols = [r["name"] for r in cur.fetchall()]
         if "version" not in task_cols:
             conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER DEFAULT 1;")
+
+    def _apply_migration_v4(self, conn: sqlite3.Connection) -> None:
+        """Applies schema v4: verified skills, knowledge snippets, and FTS5 search indexes."""
+        for raw_stmt in MIGRATION_V4_SQL.split(";"):
+            stmt = raw_stmt.strip()
+            if stmt:
+                conn.execute(stmt)

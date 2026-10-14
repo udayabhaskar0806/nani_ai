@@ -470,7 +470,7 @@ def test_database_migration_v2_to_v3(tmp_path: Path):
 
     # Open with Database class; must run migration 3 and add version column
     db = Database(db_path)
-    assert db.get_schema_version() == 3
+    assert db.get_schema_version() >= 3
 
     with db.get_connection() as c:
         cols = [r["name"] for r in c.execute("PRAGMA table_info(tasks)").fetchall()]

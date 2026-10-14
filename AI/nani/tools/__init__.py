@@ -1,5 +1,6 @@
 """N.A.N.I. V2 — Native Tools Subsystem"""
 
+from nani.tools.document_reader import DocumentReader, IngestDocumentTool, register_document_tools
 from nani.tools.filesystem import (
     CopyTool,
     CreateDirectoryTool,
@@ -51,4 +52,7 @@ __all__ = [
     "register_web_tools",
     "SystemHardwareTool",
     "register_hardware_tools",
+    "DocumentReader",
+    "IngestDocumentTool",
+    "register_document_tools",
 ]

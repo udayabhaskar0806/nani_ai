@@ -13,10 +13,14 @@ from rich.table import Table
 
 from nani.config import settings
 from nani.core.context import ExecutionContext
+from nani.core.grounding import MachineGrounding
 from nani.core.orchestrator import Orchestrator
 from nani.core.task import TaskStatus
 from nani.core.task_manager import TaskManager
+from nani.memory.skills import SkillStore
 from nani.models.base import ModelCapability
+from nani.models.consensus import ConsensusEngine
+from nani.models.learner import FederatedLearner
 from nani.models.router import ModelRouter
 from nani.tools.registry import ToolRegistry
 
@@ -35,6 +39,10 @@ class InteractiveCLI:
         self.registry = registry
         self.orchestrator = orchestrator
         self.model_router = model_router or ModelRouter.create_default()
+        self.skill_store = SkillStore(self.tm.db)
+        self.skill_store.seed_default_skills()
+        self.consensus_engine = ConsensusEngine(self.model_router)
+        self.learner = FederatedLearner(self.model_router, self.skill_store)
         self.console = Console()
         self.history: list[dict[str, Any]] = []
 
@@ -132,11 +140,125 @@ class InteractiveCLI:
                 f"[bold red]✗ Task Halted:[/bold red] {err} (Status: {final_task.status.value})\n"
             )
 
+    def display_skills_table(self) -> None:
+        """Displays stored verified skills and hit counts."""
+        skills = self.skill_store.list_skills()
+        if not skills:
+            self.console.print(
+                "[dim]No verified skills stored yet. Run 'learn: <url|file>' or ask tasks.[/dim]"
+            )
+            return
+
+        table = Table(title="Verified Fast-Path Skills (2-5ms Execution)", border_style="dim cyan")
+        table.add_column("Skill ID", style="dim white")
+        table.add_column("Description", style="bold white")
+        table.add_column("Command Template", style="cyan")
+        table.add_column("Preconditions", style="yellow")
+        table.add_column("Hits", style="green")
+
+        for sk in skills:
+            pre_str = ", ".join(f"{k}: {v}" for k, v in sk.preconditions.items()) or "None"
+            table.add_row(
+                sk.skill_id, sk.description, sk.command_template, pre_str, str(sk.success_count)
+            )
+
+        self.console.print(table)
+
+    async def execute_council(self, question: str) -> None:
+        """Runs multi-model deliberation and cross-critique rounds."""
+        self.console.print(
+            f"\n[bold magenta]🏛 Multi-Model Consensus Council Convening:[/bold magenta] [white]{question}[/white]"
+        )
+        try:
+            with self.console.status(
+                "[bold cyan]Arbitrating across AI models & cross-examining...[/bold cyan]"
+            ):
+                verdict = await self.consensus_engine.arbitrate(question)
+
+            audit_text = "\n".join(f"• {a}" for a in verdict.audit_trail)
+            self.console.print(
+                Panel(
+                    f"[bold green]Winner: {verdict.winner.provider_name} ({verdict.winner.model_name})[/bold green]\n"
+                    f"Votes: {verdict.winning_votes}/{verdict.total_votes} | Confidence: {int(verdict.confidence * 100)}% | Machine Verified: {verdict.grounding_verified}\n\n"
+                    f"[bold]Deliberation Audit Trail:[/bold]\n{audit_text}",
+                    title="Council Deliberation Verdict",
+                    border_style="magenta",
+                )
+            )
+
+            if verdict.winner.extracted_command:
+                cmd = verdict.winner.extracted_command
+                self.console.print(
+                    f"[dim]⚡ Running verified winning command: [cyan]{cmd}[/cyan]...[/dim]"
+                )
+                ctx = ExecutionContext(
+                    task_id="cli_council",
+                    workspace=Path.cwd().resolve(),
+                    metadata={"allow_unsandboxed": True},
+                )
+                tool_res = await self.registry.execute("shell", {"command": cmd}, context=ctx)
+                out = (tool_res.stdout or tool_res.stderr or "").strip()
+                self.console.print(
+                    f"\n[bold cyan]Result:[/bold cyan]\n{out or 'OK (exit code 0)'}\n"
+                )
+            else:
+                self.console.print(
+                    f"\n[bold cyan]NANI Council Response:[/bold cyan]\n{verdict.winner.content}\n"
+                )
+        except Exception as exc:
+            self.console.print(f"[red]Council Deliberation Error: {exc}[/red]")
+
+    async def execute_learning(self, source: str) -> None:
+        """Autonomously ingests source and extracts skills."""
+        self.console.print(
+            f"\n[bold blue]📚 Federated Autonomous Learning from Source:[/bold blue] [white]{source}[/white]"
+        )
+        try:
+            with self.console.status(
+                "[bold cyan]Harvesting bulk data via Llama & distilling with Gemini...[/bold cyan]"
+            ):
+                learned = await self.learner.learn_from_source(source)
+
+            self.console.print(
+                Panel(
+                    f"[bold green]Source Ingested:[/bold green] {learned.title} ({learned.latency_ms}ms)\n\n"
+                    f"[bold cyan]Digest Summary:[/bold cyan]\n{learned.summary[:800]}...\n\n"
+                    f"[bold magenta]Learned Actionable Skills:[/bold magenta] {len(learned.learned_skills)} stored into SQLite database.",
+                    title="Learning Complete",
+                    border_style="blue",
+                )
+            )
+        except Exception as exc:
+            self.console.print(f"[red]Learning Error: {exc}[/red]")
+
     async def ask_model(self, prompt: str) -> None:
+        # Fast-Path Skill Check (2-5ms execution, zero tokens)
+        snap = MachineGrounding.get_snapshot()
+        matched_skill = self.skill_store.find_matching_skill(prompt, grounding_snap=snap)
+        if matched_skill:
+            self.console.print(
+                f"[bold green]⚡ [Fast-Path 2ms Skill Hit]:[/bold green] [dim]{matched_skill.description}[/dim]"
+            )
+            cmd = matched_skill.command_template
+            if "{device}" in cmd and snap.get("backlight"):
+                cmd = cmd.replace("{device}", snap["backlight"]["device"])
+            self.console.print(f"[dim]⚡ Running command: [cyan]{cmd}[/cyan]...[/dim]")
+            ctx = ExecutionContext(
+                task_id="cli_fast_skill",
+                workspace=Path.cwd().resolve(),
+                metadata={"allow_unsandboxed": True},
+            )
+            tool_res = await self.registry.execute("shell", {"command": cmd}, context=ctx)
+            out = (tool_res.stdout or tool_res.stderr or "").strip()
+            self.console.print(
+                f"\n[bold cyan]NANI (Zero-Token Fast Execution):[/bold cyan]\n{out or 'OK (exit code 0)'}\n"
+            )
+            return
+
         provider = self.model_router.get_provider_for_capability(ModelCapability.FAST)
         if not provider or not await provider.is_available():
             self.console.print(
-                "[yellow]⚠ No active model provider configured. Set GEMINI_API_KEY or GROQ_API_KEY in .env.[/yellow]"
+                "[yellow]⚠ No active model provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, or DEEPSEEK_API_KEY in .env.[/yellow]"
             )
             return
 
@@ -145,9 +267,12 @@ class InteractiveCLI:
             self.console.print("[yellow]⚠ Gemini API key is missing.[/yellow]")
             return
 
+        grounding_context = MachineGrounding.format_grounding_prompt()
+
         system_instruction = (
             "You are N.A.N.I., an autonomous AI engineer and personal assistant running locally on the user's Linux machine.\n"
             "You have access to native tools: 'shell', 'web_search', and 'read_file'.\n"
+            f"{grounding_context}\n"
             "When the user asks you to inspect the system, open an application, check hardware, search information, or do anything:\n"
             "1. Autonomously CALL the appropriate tool (e.g. 'shell' with the exact Linux command).\n"
             "2. NEVER tell the user to manually run commands in their terminal when you can execute them directly.\n"
@@ -346,15 +471,29 @@ class InteractiveCLI:
                 elif line.lower() == "help":
                     self.console.print(
                         "[bold]Commands & Capabilities:[/bold]\n"
-                        "  status        Show runtime subsystem status\n"
-                        "  tools         List all registered native tools\n"
-                        "  clear         Clear conversational memory\n"
-                        "  task: <goal>  Execute multi-step goal through autonomous orchestrator\n"
-                        "  <question>    Ask anything (system, apps, files, web, battery, coding)\n"
-                        "  exit          Exit NANI CLI\n"
+                        "  status                 Show runtime subsystem status\n"
+                        "  tools                  List all registered native tools\n"
+                        "  skills                 List verified 2-5ms fast-path execution skills\n"
+                        "  grounding / hardware   Show physical host machine factual ground truth\n"
+                        "  clear                  Clear conversational memory\n"
+                        "  council: <question>    Convene multi-model consensus council (debate & cross-examine)\n"
+                        "  learn: <source>        Federated autonomous learning from URL, file, or man page\n"
+                        "  task: <goal>           Execute multi-step goal through autonomous orchestrator\n"
+                        "  <question>             Ask anything (fast-path skills auto-fire in 2ms)\n"
+                        "  exit                   Exit NANI CLI\n"
                     )
                 elif line.lower() == "status":
                     self.display_status_table()
+                elif line.lower() in ("grounding", "hardware"):
+                    self.console.print(
+                        Panel(
+                            MachineGrounding.format_grounding_prompt(),
+                            title="Host Machine Ground Truth",
+                            border_style="cyan",
+                        )
+                    )
+                elif line.lower() == "skills":
+                    self.display_skills_table()
                 elif line.lower() == "tools":
                     tools = self.registry.list_tools()
                     for name, t in sorted(tools.items()):
@@ -364,6 +503,12 @@ class InteractiveCLI:
                 elif line.lower() == "clear":
                     self.history.clear()
                     self.console.print("[dim]Conversational memory cleared.[/dim]")
+                elif line.lower().startswith("council:") or line.lower().startswith("debate:"):
+                    q = line.split(":", 1)[1].strip()
+                    await self.execute_council(q)
+                elif line.lower().startswith("learn:"):
+                    src = line.split(":", 1)[1].strip()
+                    await self.execute_learning(src)
                 elif (
                     line.lower().startswith("task:")
                     or line.lower().startswith("goal:")
@@ -382,6 +527,7 @@ class InteractiveCLI:
 
 
 def run_cli() -> None:
+
     from nani.main import create_runtime
 
     tm, reg, orch = create_runtime()
