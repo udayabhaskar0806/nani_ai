@@ -4,6 +4,7 @@ Abstracts all AI model providers without hardcoding any specific service into co
 """
 
 from collections import defaultdict
+from typing import Any
 
 from nani.models.base import ModelCapability, ModelProvider
 
@@ -86,3 +87,28 @@ class ModelRouter:
     def list_capabilities(self) -> dict[ModelCapability, list[str]]:
         """Returns mapping of capabilities to configured provider names."""
         return {cap: [name for _, name in entries] for cap, entries in self._capability_map.items()}
+
+    @classmethod
+    def create_default(cls, config: Any = None) -> "ModelRouter":
+        """Instantiates and registers configured model providers with priority ordering."""
+        from nani.config import settings
+        from nani.models.providers.gemini import GeminiProvider
+        from nani.models.providers.groq import GroqProvider
+        from nani.models.providers.local_ollama import OllamaProvider
+
+        cfg = config or settings
+        router = cls()
+
+        gemini_key = cfg.get_secret("gemini_api_key") if hasattr(cfg, "get_secret") else None
+        if gemini_key:
+            router.register_provider(GeminiProvider(api_key=gemini_key), priority=100)
+
+        groq_key = cfg.get_secret("groq_api_key") if hasattr(cfg, "get_secret") else None
+        if groq_key:
+            router.register_provider(GroqProvider(api_key=groq_key), priority=90)
+
+        # Register local Ollama as local offline fallback
+        ollama_url = getattr(cfg, "ollama_base_url", "http://localhost:11434")
+        router.register_provider(OllamaProvider(base_url=ollama_url), priority=10)
+
+        return router

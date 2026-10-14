@@ -17,12 +17,14 @@ from nani.tools.git import register_git_tools
 from nani.tools.process import register_process_tools
 from nani.tools.registry import ToolRegistry
 from nani.tools.shell import register_shell_tools
+from nani.tools.system_hardware import register_hardware_tools
+from nani.tools.web_search import register_web_tools
 
 console = Console()
 
 
 def create_runtime() -> tuple[TaskManager, ToolRegistry, Orchestrator]:
-    """Boots the deterministic Phase 1 execution engine."""
+    """Boots the NANI V2 execution engine."""
     db = Database(settings.db_path)
     journal = ActionJournal(db)
     task_manager = TaskManager(db=db, journal=journal)
@@ -32,6 +34,8 @@ def create_runtime() -> tuple[TaskManager, ToolRegistry, Orchestrator]:
     register_shell_tools(registry)
     register_process_tools(registry)
     register_git_tools(registry)
+    register_web_tools(registry)
+    register_hardware_tools(registry)
 
     orchestrator = Orchestrator(
         task_manager=task_manager,

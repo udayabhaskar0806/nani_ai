@@ -19,6 +19,8 @@ from nani.tools.process import ProcessTool, register_process_tools
 from nani.tools.registry import BaseTool, DuplicateToolError, ToolRegistry
 from nani.tools.result import ToolResult
 from nani.tools.shell import ShellTool, register_shell_tools
+from nani.tools.system_hardware import SystemHardwareTool, register_hardware_tools
+from nani.tools.web_search import FetchWebPageTool, WebSearchTool, register_web_tools
 
 __all__ = [
     "BaseTool",
@@ -44,4 +46,9 @@ __all__ = [
     "register_process_tools",
     "GitTool",
     "register_git_tools",
+    "WebSearchTool",
+    "FetchWebPageTool",
+    "register_web_tools",
+    "SystemHardwareTool",
+    "register_hardware_tools",
 ]
