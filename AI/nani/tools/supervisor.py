@@ -212,27 +212,28 @@ class SubprocessSupervisor:
                 start_new_session=True,
             )
 
-            if task_id and proc.pid:
-                process_registry.register(task_id, proc.pid)
-
-            try:
-                pgid = os.getpgid(proc.pid)
-            except Exception:
-                pgid = None
+            if proc.pid:
+                pgid = proc.pid
+                if task_id:
+                    process_registry.register(task_id, proc.pid)
 
             # Concurrently read stdout and stderr with timeout
             stdout_task = asyncio.create_task(cls._read_stream(proc.stdout))  # type: ignore[arg-type]
             stderr_task = asyncio.create_task(cls._read_stream(proc.stderr))  # type: ignore[arg-type]
+            wait_task = asyncio.create_task(proc.wait())
 
             done, pending = await asyncio.wait(
                 [
-                    asyncio.create_task(proc.wait()),
+                    wait_task,
                     stdout_task,
                     stderr_task,
                 ],
                 timeout=timeout,
                 return_when=asyncio.ALL_COMPLETED,
             )
+
+            for t in pending:
+                t.cancel()
 
             # Check if timeout occurred
             if proc.returncode is None:
@@ -317,7 +318,7 @@ class SubprocessSupervisor:
 
     @staticmethod
     def _kill_pgid(pgid: int | None) -> None:
-        if not pgid:
+        if not pgid or pgid <= 1:
             return
         try:
             os.killpg(pgid, signal.SIGTERM)

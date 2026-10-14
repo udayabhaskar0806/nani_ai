@@ -68,3 +68,26 @@ def test_tool_schemas_export():
     schemas = registry.get_schemas()
     assert "test_tool" in schemas
     assert schemas["test_tool"]["risk_level"] == "LOW"
+
+
+def test_parameter_validation_rejects_boolean_as_integer():
+    class SchemaTool(MockTool):
+        @property
+        def parameters_schema(self) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer"},
+                    "ratio": {"type": "number"},
+                },
+            }
+
+    tool = SchemaTool("schema_tool")
+    err1 = tool.validate_parameters({"count": True})
+    assert err1 is not None and "must be an integer" in err1
+
+    err2 = tool.validate_parameters({"ratio": False})
+    assert err2 is not None and "must be a number" in err2
+
+    assert tool.validate_parameters({"count": 42}) is None
+    assert tool.validate_parameters({"ratio": 3.14}) is None

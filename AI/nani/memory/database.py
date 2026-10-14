@@ -5,7 +5,8 @@ Provides SQLite storage with WAL mode, foreign keys, query indexes, and transact
 import os
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 CURRENT_SCHEMA_VERSION = 3
@@ -201,13 +202,21 @@ class Database:
         except Exception:
             pass
 
-    def get_connection(self) -> sqlite3.Connection:
-        """Creates a connection with WAL mode and foreign keys enabled."""
+    @contextmanager
+    def get_connection(self) -> Generator[sqlite3.Connection, None, None]:
+        """Creates a connection with WAL mode and foreign keys enabled, safely closing it upon exit."""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA journal_mode = WAL;")
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def close(self) -> None:
+        """Explicitly closes database resources if any were cached."""
+        pass
 
     def get_schema_version(self) -> int:
         """Returns the current applied schema version."""

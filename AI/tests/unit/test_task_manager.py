@@ -164,3 +164,17 @@ def test_task_persistence_across_manager_reinstantiation(tmp_path: Path):
     assert restored.plan[0].retry_count == 1
     assert restored.plan[0].verification["expected"] == 0
     assert restored.plan[1].status == StepStatus.PENDING
+
+
+def test_task_transition_records_journal_entries(tm: TaskManager):
+    task = tm.create_task(goal="Transition journal test")
+    tm.start_task(task.task_id)
+
+    with tm.db.get_connection() as conn:
+        cur = conn.execute(
+            "SELECT * FROM journal_entries WHERE task_id = ? AND entry_type = 'TRANSITION' ORDER BY timestamp ASC",
+            (task.task_id,),
+        )
+        rows = cur.fetchall()
+        assert len(rows) >= 1
+        assert rows[-1]["status"] == TaskStatus.PLANNING.value

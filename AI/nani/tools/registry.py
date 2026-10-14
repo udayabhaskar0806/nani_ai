@@ -63,8 +63,16 @@ class BaseTool(ABC):
             if param_name in properties:
                 prop_spec = properties[param_name]
                 expected_type = prop_spec.get("type")
-                if expected_type == "integer" and not isinstance(param_val, int):
+                if expected_type == "integer" and (
+                    not isinstance(param_val, int) or isinstance(param_val, bool)
+                ):
                     return f"Parameter '{param_name}' must be an integer, got {type(param_val).__name__}"
+                elif expected_type == "number" and (
+                    not isinstance(param_val, (int, float)) or isinstance(param_val, bool)
+                ):
+                    return (
+                        f"Parameter '{param_name}' must be a number, got {type(param_val).__name__}"
+                    )
                 elif expected_type == "string" and not isinstance(param_val, str):
                     return (
                         f"Parameter '{param_name}' must be a string, got {type(param_val).__name__}"

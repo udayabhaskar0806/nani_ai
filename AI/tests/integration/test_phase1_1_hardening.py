@@ -559,3 +559,46 @@ async def test_crash_recovery_interrupted_without_criteria_fails_closed(tmp_path
     # Must fail closed with crash recovery halt, never falsely complete
     assert out.status == TaskStatus.FAILED
     assert "Crash recovery halted" in (out.metadata.get("error", "") or str(out))
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_concurrent_task_execution_rejected(tmp_path: Path):
+    import asyncio
+
+    ws, tm, reg, orch = setup_runtime(tmp_path)
+    task = tm.create_task("concurrent lease test", str(ws))
+
+    base_tool = reg.get("write_file")
+    assert base_tool is not None
+
+    class AsyncYieldTool(base_tool.__class__):
+        async def run(self, **kwargs):
+            await asyncio.sleep(0.05)
+            return await super().run(**kwargs)
+
+    reg.replace(AsyncYieldTool(ws))
+    step = make_step("write_file", {"path": "concurrent.txt", "content": "hello"})
+
+    # Launch two concurrent runs for the same task
+    res1, res2 = await asyncio.gather(
+        orch.run_task(task.task_id, [step]),
+        orch.run_task(task.task_id, [step]),
+        return_exceptions=True,
+    )
+
+    # One must succeed and one must be rejected with RuntimeError
+    exceptions = [r for r in (res1, res2) if isinstance(r, RuntimeError)]
+    successes = [r for r in (res1, res2) if not isinstance(r, Exception)]
+    assert len(exceptions) == 1
+    assert "already actively executing" in str(exceptions[0])
+    assert len(successes) == 1
+
+
+def test_supervisor_kill_pgid_safety():
+    from nani.tools.supervisor import SubprocessSupervisor
+
+    # Must safely ignore None, 0, 1 without raising or killing host processes
+    SubprocessSupervisor._kill_pgid(None)
+    SubprocessSupervisor._kill_pgid(0)
+    SubprocessSupervisor._kill_pgid(1)
+    SubprocessSupervisor._kill_pgid(-1)

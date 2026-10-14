@@ -168,3 +168,18 @@ def test_migration_transaction_rollback_on_failure(tmp_path: Path):
             "SELECT name FROM sqlite_master WHERE type='table' AND name='partial_table'"
         )
         assert cur.fetchone() is None
+
+
+def test_database_connection_closed_on_context_exit(tmp_path: Path):
+    db_file = tmp_path / "conn_close_test.db"
+    db = Database(db_file)
+    saved_conn = None
+    with db.get_connection() as conn:
+        saved_conn = conn
+        cur = conn.execute("SELECT 1;")
+        assert cur.fetchone()[0] == 1
+
+    # Outside the context manager block, the connection must be closed
+    assert saved_conn is not None
+    with pytest.raises(sqlite3.ProgrammingError, match="Cannot operate on a closed database"):
+        saved_conn.execute("SELECT 1;")

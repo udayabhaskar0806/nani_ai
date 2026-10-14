@@ -5,10 +5,12 @@ Rejects illegal transitions and guarantees crash-resilience across process resta
 
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from nani.core.logger import sanitize_data_structure
+from nani.core.logger import logger as global_logger
+from nani.core.logger import redact_sensitive_data, sanitize_data_structure
 from nani.core.task import (
     ALLOWED_TASK_TRANSITIONS,
     Action,
@@ -224,15 +226,32 @@ class TaskManager:
                 )
 
             # Record transition in the SAME transaction
-            import uuid
-
             trans_id = str(uuid.uuid4())
+            entry_id = str(uuid.uuid4())
+            safe_reason = redact_sensitive_data(reason) if reason else None
             conn.execute(
                 """INSERT INTO task_transitions (transition_id, task_id, from_status, to_status, reason, timestamp)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (trans_id, task_id, current_status.value, to_status.value, reason, now),
+                (trans_id, task_id, current_status.value, to_status.value, safe_reason, now),
+            )
+            conn.execute(
+                """INSERT INTO journal_entries (entry_id, task_id, entry_type, status, error, timestamp)
+                   VALUES (?, ?, 'TRANSITION', ?, ?, ?)""",
+                (entry_id, task_id, to_status.value, safe_reason, now),
             )
             conn.commit()
+
+        global_logger.log_event(
+            event_type="TRANSITION",
+            task_id=task_id,
+            status=to_status.value,
+            data={
+                "transition_id": trans_id,
+                "from_status": current_status.value,
+                "to_status": to_status.value,
+                "reason": safe_reason,
+            },
+        )
 
         task = self.get_task(task_id)
         assert task is not None

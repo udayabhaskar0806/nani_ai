@@ -51,6 +51,7 @@ class Orchestrator:
         self.recovery = recovery or RecoveryManager()
         self.journal = journal or task_manager.journal
         self._pause_requested: bool = False
+        self._active_tasks: set[str] = set()
 
     def request_pause(self) -> None:
         """Flags the orchestrator to pause execution at the next step boundary."""
@@ -65,6 +66,21 @@ class Orchestrator:
 
         Handles CREATED, PLANNING, RUNNING, WAITING, PAUSED, RECOVERY, and VERIFYING safely.
         """
+        if task_id in self._active_tasks:
+            raise RuntimeError(
+                f"Task '{task_id}' is already actively executing in this orchestrator."
+            )
+        self._active_tasks.add(task_id)
+        try:
+            return await self._execute_task_lifecycle(task_id, predefined_steps)
+        finally:
+            self._active_tasks.discard(task_id)
+
+    async def _execute_task_lifecycle(
+        self,
+        task_id: str,
+        predefined_steps: list[PlanStep] | None = None,
+    ) -> Task:
         task = self.task_manager.get_task(task_id)
         if not task:
             raise KeyError(f"Task '{task_id}' not found.")

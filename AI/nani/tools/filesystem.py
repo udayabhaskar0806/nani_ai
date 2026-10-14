@@ -74,7 +74,8 @@ class ReadFileTool(BaseTool):
                 if offset > 0:
                     f.seek(offset)
                 limit = kwargs.get("limit")
-                content = f.read(int(limit)) if limit is not None else f.read()
+                max_read = int(limit) if limit is not None else 10_000_000
+                content = f.read(max_read)
 
             return ToolResult.ok(
                 data={
@@ -260,11 +261,17 @@ class ListDirectoryTool(BaseTool):
 
             entries = []
             for item in sorted(target.iterdir()):
+                try:
+                    is_dir = item.is_dir()
+                    size = item.stat().st_size if not is_dir else 0
+                except OSError:
+                    is_dir = False
+                    size = 0
                 entries.append(
                     {
                         "name": item.name,
-                        "is_dir": item.is_dir(),
-                        "size": item.stat().st_size if item.is_file() else 0,
+                        "is_dir": is_dir,
+                        "size": size,
                     }
                 )
             return ToolResult.ok(
@@ -317,7 +324,7 @@ class SearchFilesTool(BaseTool):
     async def run(self, **kwargs: Any) -> ToolResult:
         context: ExecutionContext | None = kwargs.pop("context", None)
         path_str = str(kwargs.get("path", "."))
-        pattern = str(kwargs.get("pattern", "*"))
+        pattern = str(kwargs.get("pattern") or "*")
         ws = _get_effective_workspace(context, self.workspace_path)
 
         try:
