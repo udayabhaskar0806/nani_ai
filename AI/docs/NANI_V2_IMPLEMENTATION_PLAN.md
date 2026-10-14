@@ -1,5 +1,5 @@
 # N.A.N.I. V2 — STEP-BY-STEP IMPLEMENTATION PLAN
-**Engineering Execution Roadmap with Acceptance Gates and Rollback Strategies**
+**Engineering Execution Roadmap with Acceptance Gates, State-of-the-Art Milestones, and Rollback Strategies**
 
 ---
 
@@ -7,144 +7,116 @@
 
 | Capability / Subsystem | Existing N.A.N.I. State | Evaluated External Candidates | Architectural Decision | Rationale |
 | :--- | :--- | :--- | :--- | :--- |
-| **Task State Machine & Lifecycle** | Minimal / stateless in `agent.py` | LangGraph, AutoGen, CrewAI, PydanticAI | **BUILD (In-House)** | Heavy frameworks add unnecessary graph abstractions. A lightweight Python `TaskManager` (~350 LOC) with SQLite persistence is faster, zero-bloat, and 100% transparent. |
-| **Model Routing & Failover** | Working multi-key rotator in `rotator.py` | LiteLLM, OpenRouter SDK | **REFACTOR & BUILD** | Refactor existing free-tier rotator into a capability-based interface (`FAST`, `REASONING`, `CODING`, `VISION`). Zero external framework overhead. |
-| **Linux Hardware & Telemetry** | Complete (`pactl`, DBus, sysfs) | Linux MCP, UFO | **MIGRATE (In-House)** | Already verified and hardware-accurate for Dell Latitude on Ubuntu X11. Migrate into `nani/tools/`. |
-| **Desktop Screen Vision & Input** | Working `screen_vision.py` + `operator.py` | UFO³, Anthropic Computer-Use Demo, PyAutoGUI | **BUILD NATIVE + REFERENCE** | Reference Anthropic's coordinate scaling and process group isolation; implement via `mss` + `pyautogui` + `xdotool` in `agents/computer/native_linux.py`. |
-| **Browser Automation (DOM/Visual)**| `xdg-open` URL launcher | Playwright, Browser Use, Stagehand | **USE Playwright + ADAPT Browser Use** | Playwright handles fast deterministic DOM tasks. `browser-use` is wrapped behind an adapter for open-ended visual search when DOM selectors are dynamic. |
-| **Autonomous Coding Worker** | Basic read/write strings | OpenHands, Aider, SWE-agent | **BUILD Native + ADAPT Aider** | Build native AST/diff patcher for immediate speed; adapt Aider's `repomap` and pair-programming pipeline as an optional plug-in worker. |
-| **Action Journal & Memory** | Basic SQLite profile store | Mem0, Chroma, LangChain Memory | **BUILD (In-House SQLite)** | Standard `sqlite3` with atomic transactions and `FTS5` full-text search meets 100% of single-user personal needs with zero background RAM usage. |
-| **Security & Safety Gates** | Ad-hoc checks | Docker, Bubblewrap (`bwrap`) | **BUILD Native Policies** | Implement risk tiers (`LOW`, `MEDIUM`, `HIGH`) and Human-in-the-Loop `safe_pause` natively. Docker remains optional. |
+| **Task State Machine & Lifecycle** | Complete (Phase 1/1.1) | LangGraph, AutoGen, CrewAI, PydanticAI | **BUILT (In-House)** | Lightweight `TaskManager` with SQLite WAL persistence is faster, zero-bloat, and 100% transparent. |
+| **Model Routing & Failover** | Complete (Phase 2) | LiteLLM, OpenRouter SDK | **BUILT (In-House)** | Capability-based router (`FAST`, `REASONING`, `CODING`, `VISION`, `RESEARCH`) with Gemini, Groq, and local Ollama failover. |
+| **Linux Hardware & Telemetry** | Complete (Phase 2) | Linux MCP, UFO | **BUILT (In-House)** | Native `/sys/class`, `pactl`, `brightnessctl`, and `/proc/meminfo` telemetry directly integrated into tool registry. |
+| **Shell & Execution Sandboxing** | Complete (Phase 1.1/2) | Docker, Podman, bubblewrap | **BUILT (bwrap Kernel Namespaces)** | Zero-container-overhead Linux namespace sandboxing with streaming byte limits, process reaping, and display pass-through. |
+| **Dynamic Multi-Turn Reasoning CLI** | Complete (Phase 2) | Open Interpreter, ShellGPT | **BUILT (In-House Rich CLI)** | Dynamic ReAct tool loop with multi-turn memory, autonomous command execution, and display-agnostic terminal dispatch. |
+| **AST Repository Mapping** | Phase 3 (Planned) | Aider `repomap`, Tree-sitter | **BUILD Native Tree-sitter AST Graph** | Incremental AST parsing and PageRank dependency graphs to map 100k+ line codebases within tight token budgets. |
+| **Desktop Screen Vision & Input** | Phase 4 (Planned) | Anthropic Computer Use, OS-World | **BUILD Closed-Loop Multimodal Vision** | Coordinate-scaled visual perception via Gemini/Claude Vision, `mss` screen grabber, and `pyautogui`/`xdotool`. |
+| **Dual-Tier Browser Automation** | Phase 5 (Planned) | Playwright, Browser Use, Stagehand | **USE Playwright + ADAPT Browser-Use** | Playwright handles deterministic DOM extraction; visual browser agent handles dynamic canvas/SPA interaction. |
+| **Autonomous Benchmark Harness** | Phase 6 (Planned) | SWE-bench, GAIA, OS-World | **BUILD Standardized Harness** | Continuous benchmark verification against real-world GitHub pull requests and desktop tasks. |
 
 ---
 
 ## 2. Phased Development Roadmap
 
-### Phase 0: Architecture Research & Open-Source Audit (CURRENT)
-* **Objective:** Complete dependency analysis, establish architectural boundaries, formulate documents.
-* **Estimated Effort:** Completed.
-* **Dependencies:** None.
-* **Files Affected:** `NANI_V2_ARCHITECTURE.md`, `NANI_V2_DEPENDENCY_EVALUATION.md`, `NANI_V2_MIGRATION_PLAN.md`, `NANI_V2_IMPLEMENTATION_PLAN.md`.
-* **Acceptance Test:** User review and formal approval of architectural plans.
-* **Rollback Strategy:** N/A (no code modified).
+### Phase 0: Architecture Research & Open-Source Audit
+* **Status:** **COMPLETE**
+* **Delivered:** Dependency audit, risk matrix, system architecture specification.
 
 ---
 
-### Phase 1: Core Runtime & Task State Machine
-* **Objective:** Build the deterministic `Task` lifecycle, `TaskManager`, SQLite `ActionJournal`, and capability-based `ModelRouter`.
-* **Estimated Effort:** 1–2 days.
-* **Dependencies:** Python standard library (`asyncio`, `sqlite3`, `dataclasses`, `uuid`).
-* **Files Affected:**
-  - `nani/core/task.py` (New)
-  - `nani/core/task_manager.py` (New)
-  - `nani/core/state.py` (New)
-  - `nani/models/base.py` (New)
-  - `nani/models/router.py` (New)
-  - `nani/memory/database.py` (Refactor `nani/core/memory.py`)
-* **Acceptance Test:**
-  - Create a dummy task with 3 steps.
-  - Verify state transitions: `CREATED` $\to$ `PLANNING` $\to$ `RUNNING` $\to$ `VERIFYING` $\to$ `COMPLETED`.
-  - Simulate process kill mid-task; verify task resumes from SQLite checkpoint.
-  - Request `router.get_model(capability=ModelCapability.VISION)` and verify it resolves to active Gemini/Groq keys.
-* **Rollback Strategy:** Revert new files in `nani/core/`; existing `nani/core/agent.py` remains active.
+### Phase 1 & 1.1: Core Runtime, State Machine & Hardened Sandbox
+* **Status:** **COMPLETE (Commit `cdfc676`, 81 Tests Passing)**
+* **Delivered:**
+  - ACID SQLite transactional database (WAL mode, schema v3, CAS versioning).
+  - Durable `ActionJournal` recording action start, observations, results, and approval gates.
+  - Deterministic `Verifier` checking concrete exit codes, file content hashes, and state invariants.
+  - Linux kernel namespace isolation (`bwrap`) with read-only root and bounded stream limits.
+  - Process-group reaping (`_kill_pgid`) and monotonic execution timeouts.
 
 ---
 
-### Phase 2: Structured System Tools & Hardware Migration
-* **Objective:** Expose standard structured tools returning `{success, exit_code, stdout, stderr, duration_ms}`.
-* **Estimated Effort:** 1 day.
-* **Dependencies:** `subprocess`, `pactl`, `gdbus`, `loginctl`.
-* **Files Affected:**
-  - `nani/tools/filesystem.py` (New: read, write, patch, search, list)
-  - `nani/tools/shell.py` (New: async bash with timeout & process group management)
-  - `nani/tools/system_hardware.py` (Migrated from `laptop_control.py`)
-  - `nani/tools/telemetry.py` (Migrated from `system_ops.py`)
-* **Acceptance Test:**
-  - Execute command `ls -la` $\to$ verify structured JSON output with exit code 0.
-  - Read non-existent file $\to$ verify clean error JSON without unhandled exceptions.
-  - Query battery and adjust volume $\to$ verify verified hardware response.
-* **Rollback Strategy:** Revert to direct calls in `laptop_control.py`.
+### Phase 2: Live Model Providers, Autonomous ReAct CLI & Hardware Telemetry
+* **Status:** **COMPLETE (Commit `c740f50`, 111 Tests Passing)**
+* **Delivered:**
+  - Multi-provider `ModelRouter` (Gemini `gemini-flash-lite-latest`, Groq, and local Ollama fallback).
+  - Rich interactive terminal CLI with persistent multi-turn conversational history.
+  - Dynamic AI ReAct loop executing native shell, web search, and file tools autonomously.
+  - Desktop display pass-through (X11 & Wayland, D-Bus session bus, XDG session vars).
+  - Dynamic AI `Planner` using `ModelCapability.REASONING` with deterministic offline fallback.
+  - Native hardware telemetry tools (battery capacity, CPU/RAM load, audio volume, brightness).
 
 ---
 
-### Phase 3: Desktop Computer Worker (Closed-Loop Vision + Input)
-* **Objective:** Implement `agents/computer/native_linux.py` supporting closed-loop observation $\to$ action $\to$ observation.
-* **Estimated Effort:** 1–2 days.
-* **Dependencies:** `pyautogui`, `mss`, `pillow`, `wmctrl`, `xdotool`.
-* **Files Affected:**
-  - `nani/computer/screen.py` (Frame grab & resolution downscaling)
-  - `nani/computer/windows.py` (Window search, list, and focus via X11)
-  - `nani/agents/computer/base.py` (Abstract worker interface)
-  - `nani/agents/computer/native_linux.py` (Physical desktop worker)
-* **Acceptance Test:**
-  - Command: *"Focus terminal window, type 'echo NANI_ONLINE', press enter"*.
-  - Verify action succeeds and screen observation confirms the output appeared on screen.
-* **Rollback Strategy:** Fallback to existing `nani/tools/screen_vision.py`.
+### Phase 3: Deep AST Repository Dependency Mapping (Aider-Grade Code Intelligence)
+* **Status:** **UPCOMING TARGET**
+* **Objective:** Give N.A.N.I. human-expert code navigation across massive multi-thousand-file repositories without token blowup.
+* **Key Components:**
+  1. **Tree-Sitter Multi-Language AST Engine:**
+     - Incremental parser for Python, C/C++, TypeScript, JavaScript, Go, Rust.
+     - Extract definition nodes (classes, functions, methods, structs) and reference nodes (function calls, imports, type annotations).
+  2. **PageRank Symbol Graph (`RepoMap`):**
+     - Build a directed dependency graph where nodes are source files/symbols and edges are references.
+     - Compute PageRank to identify central architectural components.
+     - Dynamically generate a condensed, token-budgeted `<repo-map>` injected into model prompts.
+  3. **Semantic Multi-File Diff Engine:**
+     - Unified diff applicator with fuzzy line matching and rollback on syntax error.
+* **Dependencies:** `tree-sitter`, language grammars (`tree-sitter-python`, `tree-sitter-c`).
+* **Acceptance Gate:**
+  - Point NANI to a multi-file 10,000+ line repository.
+  - Prompt: *"Refactor logging across all worker modules to use structured JSON"*.
+  - Verify NANI selects the exact relevant files and produces correct diffs without reading the entire codebase into context.
 
 ---
 
-### Phase 4: Browser Worker (Playwright DOM + Browser Use Adapter)
-* **Objective:** Build dual-tier web automation (DOM-first Playwright + Visual Browser-Use adapter).
-* **Estimated Effort:** 1–2 days.
-* **Dependencies:** `playwright`, optional `browser-use`.
-* **Files Affected:**
-  - `nani/agents/browser/base.py`
-  - `nani/agents/browser/playwright_native.py`
-  - `nani/agents/browser/browser_use_adapter.py`
-* **Acceptance Test (Section 26 Test):**
-  - Goal: *"Open browser, go to Google Flights or BookMyShow, find prices/timings"*.
-  - Verify browser launches, extracts data via DOM/Playwright, pauses safely before any payment action.
-* **Rollback Strategy:** Disable `browser_use_adapter`; rely on standard Playwright script runner.
+### Phase 4: Closed-Loop Multimodal GUI Vision (Computer Use & Pixel Grounding)
+* **Status:** **UPCOMING TARGET**
+* **Objective:** Enable N.A.N.I. to visually perceive, understand, and interact with arbitrary non-scriptable desktop applications.
+* **Key Components:**
+  1. **High-Speed Frame Capture:**
+     - Multi-monitor screenshot pipeline via `mss` (X11) and `xdg-desktop-portal` (Wayland).
+     - Intelligent downscaling maintaining readable typography and UI borders.
+  2. **Multimodal Visual Coordinate Grounding:**
+     - Send desktop visual frames to multimodal vision models (Gemini 2.5 Flash / Claude 3.5 Sonnet).
+     - Ground natural language UI references (*"Click the green Run button"*, *"Select the third tab"*) to exact `(x, y)` screen pixels.
+  3. **Closed-Loop Verification:**
+     - Execute input $\to$ Capture subsequent frame $\to$ Verify visual change (e.g., menu opened, button toggled).
+* **Dependencies:** `pillow`, `mss`, `pyautogui`, `xdotool`.
+* **Acceptance Gate:**
+  - Command: *"Open LibreOffice Writer, type 'NANI Automated Document', and click Save"*.
+  - Verify the closed loop successfully completes via vision and mouse clicks.
 
 ---
 
-### Phase 5: Autonomous Coding Worker
-* **Objective:** Build `agents/coding/native.py` for direct repo exploration, diff patching, and compiler execution.
-* **Estimated Effort:** 2 days.
-* **Dependencies:** `git`, `tree-sitter` (optional), standard library.
-* **Files Affected:**
-  - `nani/agents/coding/base.py`
-  - `nani/agents/coding/native.py`
-  - `nani/agents/coding/aider_adapter.py` (Optional adapter)
-* **Acceptance Test (Section 25 Alpha Acceptance Test):**
-  - Setup broken C test project (`test_spi_driver/`) with missing semicolon and pointer type mismatch in Makefile.
-  - Goal: *"NANI, inspect this project, find why it doesn't build, fix it, compile and test"*.
-  - Verify: Reads files directly $\to$ runs `make` $\to$ diagnoses error $\to$ patches file $\to$ rebuilds $\to$ tests pass.
-* **Rollback Strategy:** Revert worker; fall back to simple file editing tool.
+### Phase 5: Dual-Tier Web Browser Automation (Playwright DOM + Visual Agent)
+* **Status:** **PLANNED**
+* **Objective:** Reliable autonomous web research, form submission, and data extraction.
+* **Key Components:**
+  1. **Tier 1 (Fast Deterministic DOM):** Playwright Chromium engine for structured web scraping and element interaction.
+  2. **Tier 2 (Open-Ended Visual Agent):** Wrapped `browser-use` adapter for dynamic single-page applications and complex canvases where DOM selectors fail.
+  3. **Safety Intercept:** Autonomous payment / checkout gating halting for human confirmation.
+* **Dependencies:** `playwright`.
 
 ---
 
-### Phase 6: Unified Orchestrator & Autonomous Loop
-* **Objective:** Connect `Planner`, `CapabilityRouter`, workers, and independent `Verifier` into the unified closed loop.
-* **Estimated Effort:** 2 days.
-* **Dependencies:** All previous phases.
-* **Files Affected:**
-  - `nani/core/planner.py`
-  - `nani/core/router.py`
-  - `nani/core/recovery.py`
-  - `nani/core/verifier.py`
-  - `nani/core/orchestrator.py`
-  - `nani/interfaces/cli.py` (Rich terminal binding)
-* **Acceptance Test:**
-  - Full end-to-end execution of multi-step goals with live Rich progress cards (Goal, Plan, Step, Action, Observation, Verification).
-* **Rollback Strategy:** Retain legacy CLI flag `--legacy` to launch old `agent.py`.
-
----
-
-### Phase 7: Security Governance & Human-in-the-Loop Gate
-* **Objective:** Enforce `safe_pause` for all high-risk operations (financial, sensitive data, destructive commands).
-* **Estimated Effort:** 1 day.
-* **Files Affected:**
-  - `nani/security/policy.py`
-  - `nani/security/approvals.py`
-* **Acceptance Test:**
-  - Trigger mock payment or `rm -rf` $\to$ verify system halts in `WAITING` state and requires explicit `[Y/n]` override.
-* **Rollback Strategy:** Default to strict confirmation on all external commands.
+### Phase 6: Continuous Public Benchmarking Harness (SWE-bench & OS-World)
+* **Status:** **PLANNED**
+* **Objective:** Benchmark N.A.N.I. against world-standard software engineering and agentic benchmarks.
+* **Key Components:**
+  1. **SWE-bench Lite Test Runner:**
+     - Standard test runner evaluating N.A.N.I.'s coding worker on 300 real GitHub issue PRs.
+     - Automated patch verification running unit tests inside clean `bwrap` sandboxes.
+  2. **OS-World Benchmark Adapter:**
+     - Standard benchmark assessing desktop operating system automation accuracy.
+* **Acceptance Gate:**
+  - Automated benchmark report generating resolve rate %, token cost, and execution duration.
 
 ---
 
 ## 3. Rollback & Failsafe Guarantees
 
-1. **Git Branching Isolation:** All V2 implementation will occur on a feature branch (`v2-core-runtime`) or modular package structure without touching working V1 code until Phase 6 verification passes.
-2. **Interface Parity:** The Rich CLI and Web Dashboard will continue to launch seamlessly.
-3. **Hardware Safety:** All brightness, audio, and battery DBus hooks have strict value clamping ($10 \le \text{brightness} \le 100$, $0 \le \text{volume} \le 100$) to prevent hardware misuse.
+1. **Deterministic Verification Invariant:** No phase may weaken or bypass the independent [Verifier](file:///home/dell/Vibe%20Coding/AI/nani/core/verifier.py).
+2. **Crash-Resilient State Machine:** Every action must continue to be journaled to SQLite before execution.
+3. **Hardware Protection:** Low-level hardware drivers must retain clamping limits to prevent screen blackout or audio spikes.
