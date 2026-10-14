@@ -16,6 +16,7 @@ from nani.core.task import ActionStatus, PlanStep, StepStatus, Task, TaskStatus
 from nani.core.task_manager import TaskManager
 from nani.core.verifier import Verifier
 from nani.memory.journal import ActionJournal
+from nani.models.router import ModelRouter
 from nani.tools.registry import ToolRegistry
 from nani.tools.result import ToolResult
 
@@ -42,10 +43,12 @@ class Orchestrator:
         verifier: Verifier | None = None,
         recovery: RecoveryManager | None = None,
         journal: ActionJournal | None = None,
+        model_router: ModelRouter | None = None,
     ) -> None:
         self.task_manager = task_manager
         self.tool_registry = tool_registry
-        self.planner = planner or Planner()
+        self.model_router = model_router or ModelRouter.create_default()
+        self.planner = planner or Planner(model_router=self.model_router)
         self.router = router or CapabilityRouter()
         self.verifier = verifier or Verifier()
         self.recovery = recovery or RecoveryManager()
@@ -93,11 +96,18 @@ class Orchestrator:
                 )
 
             try:
-                plan = self.planner.plan(
-                    goal=task.original_goal,
-                    predefined_steps=predefined_steps,
-                    task_metadata=task.metadata,
-                )
+                if hasattr(self.planner, "plan_async"):
+                    plan = await self.planner.plan_async(
+                        goal=task.original_goal,
+                        predefined_steps=predefined_steps,
+                        task_metadata=task.metadata,
+                    )
+                else:
+                    plan = self.planner.plan(
+                        goal=task.original_goal,
+                        predefined_steps=predefined_steps,
+                        task_metadata=task.metadata,
+                    )
             except Exception as e:
                 return self.task_manager.fail_task(task_id, reason=f"Planning failed: {e}")
 

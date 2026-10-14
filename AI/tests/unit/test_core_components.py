@@ -47,6 +47,55 @@ def test_planner_predefined_steps():
     assert steps[0].description == "Custom action"
 
 
+@pytest.mark.asyncio
+async def test_planner_dynamic_plan_with_model_router():
+    from nani.models.base import ModelCapability, ModelProvider, ModelRequest, ModelResponse
+    from nani.models.router import ModelRouter
+
+    class MockPlanningProvider(ModelProvider):
+        @property
+        def name(self) -> str:
+            return "mock_planner_ai"
+
+        @property
+        def supported_capabilities(self) -> list[ModelCapability]:
+            return [ModelCapability.REASONING]
+
+        async def is_available(self) -> bool:
+            return True
+
+        async def generate(self, request: ModelRequest) -> ModelResponse:
+            steps_json = """[
+              {
+                "order": 1,
+                "description": "Scan open network ports",
+                "capability_required": "SYSTEM",
+                "risk_level": "LOW",
+                "worker": "system_worker",
+                "tool": "shell",
+                "parameters": {"command": "ss -tuln"},
+                "verification": {"type": "tool_success"}
+              }
+            ]"""
+            return ModelResponse(
+                content=steps_json,
+                provider_name="mock_planner_ai",
+                model_name="mock-v1",
+                tokens_used=50,
+            )
+
+    router = ModelRouter()
+    router.register_provider(MockPlanningProvider())
+    planner = Planner(model_router=router)
+
+    steps = await planner.plan_async(goal="Check open ports")
+    assert len(steps) == 1
+    assert steps[0].description == "Scan open network ports"
+    assert steps[0].capability_required == WorkerCapability.SYSTEM
+    assert steps[0].actions[0].tool == "shell"
+    assert steps[0].actions[0].parameters["command"] == "ss -tuln"
+
+
 # --- Verifier Tests ---
 
 

@@ -3,6 +3,7 @@ Provides command prompt, live task tracking, hardware status bar, and autonomous
 """
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -11,6 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from nani.config import settings
+from nani.core.context import ExecutionContext
 from nani.core.orchestrator import Orchestrator
 from nani.core.task import TaskStatus
 from nani.core.task_manager import TaskManager
@@ -34,6 +36,7 @@ class InteractiveCLI:
         self.orchestrator = orchestrator
         self.model_router = model_router or ModelRouter.create_default()
         self.console = Console()
+        self.history: list[dict[str, Any]] = []
 
     def print_banner(self) -> None:
         version = self.tm.db.get_schema_version()
@@ -64,6 +67,21 @@ class InteractiveCLI:
         table.add_row("Model Router", "ONLINE", f"Configured: {', '.join(prov_names)}")
 
         self.console.print(table)
+
+    def _get_api_contents(self) -> list[dict[str, Any]]:
+        """Returns bounded conversation history formatted for Gemini API."""
+        if len(self.history) <= 30:
+            return list(self.history)
+        # Slice recent messages and ensure starting at valid user message
+        sliced = self.history[-20:]
+        while sliced:
+            first = sliced[0]
+            if first.get("role") == "user":
+                parts = first.get("parts", [])
+                if parts and "text" in parts[0]:
+                    break
+            sliced.pop(0)
+        return sliced or list(self.history[-1:])
 
     async def execute_goal(self, goal: str) -> None:
         self.console.print(f"\n[bold green]▶ Initializing Task:[/bold green] [white]{goal}[/white]")
@@ -129,10 +147,13 @@ class InteractiveCLI:
 
         system_instruction = (
             "You are N.A.N.I., an autonomous AI engineer and personal assistant running locally on the user's Linux machine.\n"
-            "When the user asks a question about the system, time, laptop hardware, processes, files, or network:\n"
-            "DO NOT tell the user to run commands manually in their terminal.\n"
-            "Instead, autonomously CALL THE 'shell' TOOL with the exact Linux command (e.g. date, hostnamectl, cat /sys/class/power_supply/BAT*/capacity, df -h, free -h, ps, etc.).\n"
-            "Once you receive the tool output, understand it and explain the result to the user clearly and concisely in a natural human voice."
+            "You have access to native tools: 'shell', 'web_search', and 'read_file'.\n"
+            "When the user asks you to inspect the system, open an application, check hardware, search information, or do anything:\n"
+            "1. Autonomously CALL the appropriate tool (e.g. 'shell' with the exact Linux command).\n"
+            "2. NEVER tell the user to manually run commands in their terminal when you can execute them directly.\n"
+            "3. Maintain full conversation context across turns. If the user gives follow-up feedback (e.g. 'not opened', 'failed', 'try another way', 'explain that'), reference previous actions, diagnose what went wrong, and take active corrective action instead of asking what they meant.\n"
+            "4. When launching desktop GUI applications (e.g. terminals, browsers, editors): launch them detached in background (e.g. 'nohup gnome-terminal >/dev/null 2>&1 &' or 'xterm &'). If the user reports it didn't open, try alternative terminal emulators like 'xterm &' or inspect $DISPLAY.\n"
+            "5. Once you get tool output, understand it and explain the result clearly and concisely in a natural human voice."
         )
 
         tools = [
@@ -143,7 +164,7 @@ class InteractiveCLI:
                         "description": (
                             "Executes a Linux bash command on the local machine (e.g. date, hostnamectl, "
                             "cat /sys/class/power_supply/BAT*/capacity, df -h, free -h, uptime, ps, ip a, git, etc.) "
-                            "to inspect hardware, time, network, system info, or files."
+                            "to inspect hardware, time, network, system info, launch applications, or run scripts."
                         ),
                         "parameters": {
                             "type": "OBJECT",
@@ -188,7 +209,8 @@ class InteractiveCLI:
             }
         ]
 
-        contents: list[dict[str, Any]] = [{"role": "user", "parts": [{"text": prompt}]}]
+        # Add user prompt to multi-turn conversation history
+        self.history.append({"role": "user", "parts": [{"text": prompt}]})
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key={api_key}"
         max_turns = 5
 
@@ -196,7 +218,7 @@ class InteractiveCLI:
             for _ in range(max_turns):
                 payload = {
                     "systemInstruction": {"parts": [{"text": system_instruction}]},
-                    "contents": contents,
+                    "contents": self._get_api_contents(),
                     "tools": tools,
                 }
                 resp = await client.post(url, json=payload)
@@ -220,11 +242,18 @@ class InteractiveCLI:
                     if fn_name == "shell":
                         cmd = str(fn_args.get("command", "")).strip()
                         self.console.print(f"[dim]⚡ Running command: [cyan]{cmd}[/cyan]...[/dim]")
-                        tool_res = await self.registry.execute("shell", {"command": cmd})
+                        ctx = ExecutionContext(
+                            task_id="cli_interactive",
+                            workspace=Path.cwd().resolve(),
+                            metadata={"allow_unsandboxed": True},
+                        )
+                        tool_res = await self.registry.execute(
+                            "shell", {"command": cmd}, context=ctx
+                        )
                         out = (tool_res.stdout or tool_res.stderr or "").strip()
                         if not out:
                             out = (
-                                "OK (no output, exit code 0)"
+                                "OK (exit code 0)"
                                 if tool_res.success
                                 else f"Command failed: {tool_res.error}"
                             )
@@ -254,9 +283,9 @@ class InteractiveCLI:
                     else:
                         result_payload = {"error": f"Tool '{fn_name}' not available"}
 
-                    # Append model call and function response to contents
-                    contents.append({"role": "model", "parts": [part]})
-                    contents.append(
+                    # Append model call and function response to history
+                    self.history.append({"role": "model", "parts": [part]})
+                    self.history.append(
                         {
                             "role": "user",
                             "parts": [
@@ -271,11 +300,18 @@ class InteractiveCLI:
                     )
                 else:
                     final_text = part.get("text", "")
+                    self.history.append({"role": "model", "parts": [{"text": final_text}]})
                     self.console.print(f"\n[bold cyan]NANI:[/bold cyan]\n{final_text}\n")
                     return
 
             # Final summary if loop exhausted
-            final_resp = await client.post(url, json={"contents": contents})
+            final_resp = await client.post(
+                url,
+                json={
+                    "systemInstruction": {"parts": [{"text": system_instruction}]},
+                    "contents": self._get_api_contents(),
+                },
+            )
             if final_resp.status_code == 200:
                 p = (
                     final_resp.json()
@@ -285,6 +321,7 @@ class InteractiveCLI:
                 )
                 ans = p.get("text", "")
                 if ans:
+                    self.history.append({"role": "model", "parts": [{"text": ans}]})
                     self.console.print(f"\n[bold cyan]NANI:[/bold cyan]\n{ans}\n")
 
     async def run_loop(self) -> None:
@@ -307,8 +344,9 @@ class InteractiveCLI:
                         "[bold]Commands & Capabilities:[/bold]\n"
                         "  status        Show runtime subsystem status\n"
                         "  tools         List all registered native tools\n"
-                        "  <question>    Ask anything (time, laptop name, battery, disk space, web info)\n"
-                        "  c project     Build and verify deterministic C project pipeline\n"
+                        "  clear         Clear conversational memory\n"
+                        "  task: <goal>  Execute multi-step goal through autonomous orchestrator\n"
+                        "  <question>    Ask anything (system, apps, files, web, battery, coding)\n"
                         "  exit          Exit NANI CLI\n"
                     )
                 elif line.lower() == "status":
@@ -319,8 +357,16 @@ class InteractiveCLI:
                         self.console.print(
                             f"  [cyan]{name:18}[/cyan] [dim]({t.capability.value:8})[/dim] {t.description}"
                         )
-                elif "c project" in line.lower() or "compile hello.c" in line.lower():
-                    await self.execute_goal(line)
+                elif line.lower() == "clear":
+                    self.history.clear()
+                    self.console.print("[dim]Conversational memory cleared.[/dim]")
+                elif (
+                    line.lower().startswith("task:")
+                    or line.lower().startswith("goal:")
+                    or line.lower().startswith("/task ")
+                ):
+                    goal_text = line.split(":", 1)[-1].strip() if ":" in line else line[6:].strip()
+                    await self.execute_goal(goal_text)
                 else:
                     # Autonomous AI reasoning with dynamic shell & web tool execution
                     await self.ask_model(line)

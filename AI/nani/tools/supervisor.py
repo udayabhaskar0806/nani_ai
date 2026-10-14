@@ -85,9 +85,10 @@ class ExecutionIsolationAdapter:
 
         Returns (wrapped_argv, success, reason).
         """
+        if allow_unsandboxed or os.environ.get("NANI_ALLOW_UNSANDBOXED_FOR_TESTS") == "1":
+            return (argv, True, "EXPLICIT_UNSANDBOXED_AUTHORIZED")
+
         if not cls.is_bwrap_available():
-            if allow_unsandboxed or os.environ.get("NANI_ALLOW_UNSANDBOXED_FOR_TESTS") == "1":
-                return (argv, True, "EXPLICIT_UNSANDBOXED_AUTHORIZED")
             return (
                 argv,
                 False,
@@ -111,6 +112,17 @@ class ExecutionIsolationAdapter:
             "/proc",
             "--die-with-parent",
         ]
+
+        # Mount user runtime directory (for X11, D-Bus session bus, audio, Wayland)
+        uid = os.getuid() if hasattr(os, "getuid") else None
+        if uid is not None:
+            user_run_dir = Path(f"/run/user/{uid}")
+            if user_run_dir.exists():
+                wrapped.extend(["--bind", str(user_run_dir), str(user_run_dir)])
+        x11_unix = Path("/tmp/.X11-unix")
+        if x11_unix.exists():
+            wrapped.extend(["--bind", str(x11_unix), str(x11_unix)])
+
         if not network_allowed:
             wrapped.append("--unshare-net")
 
@@ -128,13 +140,27 @@ class SubprocessSupervisor:
         """Produces a strictly allowlisted environment stripping parent secrets and credentials."""
         tmp_dir = workspace / ".tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        return {
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "TMPDIR": str(tmp_dir),
-            "HOME": str(workspace),
+            "HOME": os.environ.get("HOME", str(workspace)),
         }
+        # Desktop GUI & session bus pass-through for terminal and window dispatch
+        for k in (
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_RUNTIME_DIR",
+            "USER",
+            "SHELL",
+            "TERM",
+        ):
+            if k in os.environ:
+                env[k] = os.environ[k]
+        return env
 
     @staticmethod
     async def _read_stream(
