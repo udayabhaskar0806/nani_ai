@@ -106,11 +106,49 @@ class MachineGrounding:
         return mem_info
 
     @classmethod
+    def get_distro_info(cls) -> str:
+        """Dynamically reads host distribution from /etc/os-release without hardcoding."""
+        for p in (Path("/etc/os-release"), Path("/usr/lib/os-release")):
+            if p.exists():
+                try:
+                    data: dict[str, str] = {}
+                    for line in p.read_text().splitlines():
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            data[k.strip()] = v.strip("\"'")
+                    return data.get("PRETTY_NAME") or data.get("NAME") or "Linux"
+                except Exception:
+                    pass
+        return f"{platform.system()} ({platform.release()})"
+
+    @classmethod
+    def get_package_managers(cls) -> list[str]:
+        """Dynamically inspects which package managers are installed on host $PATH."""
+        candidates = ("apt", "snap", "flatpak", "pacman", "dnf", "zypper", "apk", "brew")
+        return [mgr for mgr in candidates if shutil.which(mgr)]
+
+    @classmethod
+    def get_sudo_status(cls) -> str:
+        """Determines if the current user has non-interactive passwordless sudo."""
+        import subprocess
+
+        try:
+            res = subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=1.0)
+            if res.returncode == 0:
+                return "Passwordless sudo available"
+            return "Password required (non-interactive sudo unavailable)"
+        except Exception:
+            return "Sudo not available or restricted"
+
+    @classmethod
     def get_snapshot(cls) -> dict[str, Any]:
         """Produces a comprehensive dictionary of the machine's concrete state."""
         load = os.getloadavg() if hasattr(os, "getloadavg") else (0.0, 0.0, 0.0)
         return {
             "os": platform.system(),
+            "distro": cls.get_distro_info(),
+            "package_managers": cls.get_package_managers(),
+            "sudo_status": cls.get_sudo_status(),
             "release": platform.release(),
             "machine": platform.machine(),
             "display": os.environ.get("DISPLAY"),
@@ -131,7 +169,9 @@ class MachineGrounding:
         snap = cls.get_snapshot()
         lines = [
             "### Local Machine Ground Truth:",
-            f"- OS: {snap['os']} ({snap['release']}, {snap['machine']})",
+            f"- OS: {snap['distro']} ({snap['machine']}, Kernel: {snap['release']})",
+            f"- Package Managers: {', '.join(snap['package_managers']) if snap['package_managers'] else 'None detected'}",
+            f"- Privilege: {snap['sudo_status']}",
             f"- Session: {snap['session_type'].upper()} (Desktop: {snap['desktop'] or 'None'}, Display: {snap['wayland_display'] or snap['display'] or 'Headless'})",
         ]
 

@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -43,8 +44,9 @@ class IntentClassifier:
         'Output ONLY a JSON object: {"intent": "SYSTEM" | "LEARNING" | "CONVERSATIONAL", "rationale": "brief reason"}'
     )
 
-    def __init__(self, router: ModelRouter | None = None) -> None:
+    def __init__(self, router: ModelRouter | None = None, skill_store: Any | None = None) -> None:
         self.router = router
+        self.skill_store = skill_store
 
     async def classify(self, query: str) -> IntentClassification:
         clean_q = query.strip()
@@ -83,28 +85,18 @@ class IntentClassifier:
                 except Exception as exc:
                     logger.debug("Fast model intent classification failed, using fallback: %s", exc)
 
-        # 2. Resilient fallback when no AI model is reachable
-        lower = clean_q.lower()
-        if any(
-            w in lower
-            for w in (
-                "this pc",
-                "this computer",
-                "my laptop",
-                "my system",
-                "sudo ",
-                "apt ",
-                "dpkg ",
-                "chmod ",
-                "kill ",
-                "systemctl ",
-            )
-        ):
-            return IntentClassification(
-                intent=UserIntent.SYSTEM, rationale="Local PC direct context"
-            )
+        # 2. Resilient fallback using database context or general learning route
+        # When AI model is temporarily unreachable, check if query matches known verified skills in DB
+        if hasattr(self, "skill_store") and self.skill_store:
+            try:
+                matched = self.skill_store.find_matching_skill(clean_q)
+                if matched:
+                    return IntentClassification(
+                        intent=UserIntent.SYSTEM,
+                        rationale=f"Matches verified skill in DB: {matched.skill_id}",
+                    )
+            except Exception:
+                pass
 
-        # Default to LEARNING for general questions / concepts
-        return IntentClassification(
-            intent=UserIntent.LEARNING, rationale="Fallback knowledge route"
-        )
+        # General conceptual and educational default
+        return IntentClassification(intent=UserIntent.LEARNING, rationale="Dynamic cognitive route")
