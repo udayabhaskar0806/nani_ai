@@ -135,13 +135,12 @@ class SkillStore:
         """Attempts 2-5ms fast-path lookup for a user intent.
 
         Evaluates exact regex matches first, followed by FTS5 rank queries,
-
         and verifies that host machine conditions are satisfied.
         """
         clean_query = query.strip()
         snap = grounding_snap or MachineGrounding.get_snapshot()
 
-        # Step 1: Direct Regex / Pattern match across all stored skills
+        # Direct Regex / Pattern match across stored verified skills
         skills = self.list_skills()
         for skill in skills:
             try:
@@ -151,39 +150,6 @@ class SkillStore:
                         return skill
             except Exception:
                 pass
-
-        # Step 2: FTS5 Full-Text Search
-        # Sanitize query for FTS5 (remove special punctuation)
-        fts_query = re.sub(r"[^\w\s]", "", clean_query).strip()
-        if not fts_query:
-            return None
-
-        # Format FTS5 terms with OR for high recall
-        terms = [f'"{w}"' for w in fts_query.split() if len(w) > 2]
-        if not terms:
-            return None
-        match_expr = " OR ".join(terms)
-
-        try:
-            with self.db.get_connection() as conn:
-                cur = conn.execute(
-                    """
-                    SELECT s.* FROM verified_skills s
-                    JOIN verified_skills_fts fts ON s.skill_id = fts.skill_id
-                    WHERE verified_skills_fts MATCH ?
-                    ORDER BY rank, s.success_count DESC
-                    LIMIT 3
-                    """,
-                    (match_expr,),
-                )
-                rows = cur.fetchall()
-                for r in rows:
-                    candidate = self._row_to_skill(r)
-                    if self._verify_preconditions(candidate, snap):
-                        self._increment_success(candidate.skill_id)
-                        return candidate
-        except Exception:
-            pass
 
         return None
 
@@ -286,14 +252,11 @@ class SkillStore:
             return []
 
     def seed_default_skills(self) -> None:
-        """Seeds foundational verified Linux hardware & system recipes if store is empty."""
-        if self.list_skills():
-            return
-
+        """Seeds foundational verified Linux hardware & system recipes."""
         defaults = [
             VerifiedSkill(
                 skill_id="skill-sysfs-brightness",
-                intent_pattern=r"(check|read|get|what.*is).*brightness",
+                intent_pattern=r"\b(check|read|get|whats?\s+my|what\s+is\s+my|my|screen)\s+.*brightness\b",
                 description="Reads screen brightness directly from Linux kernel sysfs",
                 preconditions={},
                 command_template="cat /sys/class/backlight/*/brightness",
@@ -301,7 +264,7 @@ class SkillStore:
             ),
             VerifiedSkill(
                 skill_id="skill-sysfs-battery",
-                intent_pattern=r"(check|read|get|what.*is).*battery",
+                intent_pattern=r"\b(check|read|get|whats?\s+my|what\s+is\s+my|my)\s+.*battery\b",
                 description="Reads laptop battery capacity directly from Linux power supply sysfs",
                 preconditions={},
                 command_template="cat /sys/class/power_supply/BAT*/capacity",
@@ -309,7 +272,7 @@ class SkillStore:
             ),
             VerifiedSkill(
                 skill_id="skill-sys-memory",
-                intent_pattern=r"(check|read|get|free).*memory",
+                intent_pattern=r"\b(check|read|get|free|available)\s+.*memory\b",
                 description="Inspects system RAM usage and available memory",
                 preconditions={},
                 command_template="free -h",
@@ -317,7 +280,7 @@ class SkillStore:
             ),
             VerifiedSkill(
                 skill_id="skill-net-ip",
-                intent_pattern=r"(check|get|what.*is).*ip.*address",
+                intent_pattern=r"\b(show|check|get|whats?\s+my|what\s+is\s+my|my)\s+(ip|ip\s+address|network\s+ip)\b",
                 description="Displays network interfaces and IP addresses",
                 preconditions={"installed": ["ip"]},
                 command_template="ip -brief address",

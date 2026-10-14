@@ -3,6 +3,8 @@ Provides command prompt, live task tracking, hardware status bar, and autonomous
 """
 
 import asyncio
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ from rich.table import Table
 from nani.config import settings
 from nani.core.context import ExecutionContext
 from nani.core.grounding import MachineGrounding
+from nani.core.intent import IntentClassifier, UserIntent
 from nani.core.orchestrator import Orchestrator
 from nani.core.task import TaskStatus
 from nani.core.task_manager import TaskManager
@@ -43,6 +46,7 @@ class InteractiveCLI:
         self.skill_store.seed_default_skills()
         self.consensus_engine = ConsensusEngine(self.model_router)
         self.learner = FederatedLearner(self.model_router, self.skill_store)
+        self.intent_classifier = IntentClassifier(self.model_router)
         self.console = Console()
         self.history: list[dict[str, Any]] = []
 
@@ -231,61 +235,9 @@ class InteractiveCLI:
         except Exception as exc:
             self.console.print(f"[red]Learning Error: {exc}[/red]")
 
-    async def ask_model(self, prompt: str) -> None:
-        # Fast-Path Skill Check (2-5ms execution, zero tokens)
-        snap = MachineGrounding.get_snapshot()
-        matched_skill = self.skill_store.find_matching_skill(prompt, grounding_snap=snap)
-        if matched_skill:
-            self.console.print(
-                f"[bold green]⚡ [Fast-Path 2ms Skill Hit]:[/bold green] [dim]{matched_skill.description}[/dim]"
-            )
-            cmd = matched_skill.command_template
-            if "{device}" in cmd and snap.get("backlight"):
-                cmd = cmd.replace("{device}", snap["backlight"]["device"])
-            self.console.print(f"[dim]⚡ Running command: [cyan]{cmd}[/cyan]...[/dim]")
-            ctx = ExecutionContext(
-                task_id="cli_fast_skill",
-                workspace=Path.cwd().resolve(),
-                metadata={"allow_unsandboxed": True},
-            )
-            tool_res = await self.registry.execute("shell", {"command": cmd}, context=ctx)
-            out = (tool_res.stdout or tool_res.stderr or "").strip()
-            self.console.print(
-                f"\n[bold cyan]NANI (Zero-Token Fast Execution):[/bold cyan]\n{out or 'OK (exit code 0)'}\n"
-            )
-            return
-
-        provider = self.model_router.get_provider_for_capability(ModelCapability.FAST)
-        if not provider or not await provider.is_available():
-            self.console.print(
-                "[yellow]⚠ No active model provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, or DEEPSEEK_API_KEY in .env.[/yellow]"
-            )
-            return
-
-        api_key = getattr(provider, "api_key", None) or settings.get_secret("gemini_api_key")
-        if not api_key:
-            self.console.print("[yellow]⚠ Gemini API key is missing.[/yellow]")
-            return
-
-        grounding_context = MachineGrounding.format_grounding_prompt()
-
-        system_instruction = (
-            "You are N.A.N.I., an autonomous AI engineer and personal assistant running locally on the user's Linux machine.\n"
-            "You have access to native tools: 'shell', 'web_search', and 'read_file'.\n"
-            f"{grounding_context}\n"
-            "When the user asks you to inspect the system, open an application, check hardware, search information, or do anything:\n"
-            "1. Autonomously CALL the appropriate tool (e.g. 'shell' with the exact Linux command).\n"
-            "2. NEVER tell the user to manually run commands in their terminal when you can execute them directly.\n"
-            "3. Maintain full conversation context across turns. If the user gives follow-up feedback (e.g. 'not opened', 'failed', 'try another way', 'explain that'), reference previous actions, diagnose what went wrong, and take active corrective action instead of asking what they meant.\n"
-            "4. When launching desktop GUI applications or terminals across ANY Linux system (Wayland or X11, Ubuntu, Fedora, Arch, Debian, KDE, GNOME, etc.):\n"
-            "   - Dynamically detect and launch the installed terminal emulator, e.g.:\n"
-            "     nohup $(which x-terminal-emulator gnome-terminal konsole xfce4-terminal ptyxis alacritty kitty foot xterm 2>/dev/null | head -n 1) >/dev/null 2>&1 &\n"
-            "   - Always run GUI applications detached in the background using nohup and '&' so the shell returns immediately.\n"
-            "   - If no graphical display is active (e.g. headless server without $DISPLAY or $WAYLAND_DISPLAY), inform the user that no graphical display is attached.\n"
-            "5. Once you get tool output, understand it and explain the result clearly and concisely in a natural human voice."
-        )
-
-        tools = [
+    def _build_tools_spec(self) -> list[dict[str, Any]]:
+        """Returns Gemini function declaration schema for native system tools."""
+        return [
             {
                 "functionDeclarations": [
                     {
@@ -338,6 +290,95 @@ class InteractiveCLI:
             }
         ]
 
+    async def ask_model(self, prompt: str) -> None:
+        # Step 1: Fast-Path Skill Check (2-5ms execution, zero tokens)
+        snap = MachineGrounding.get_snapshot()
+        matched_skill = self.skill_store.find_matching_skill(prompt, grounding_snap=snap)
+        if matched_skill:
+            self.console.print(
+                f"[bold green]⚡ [Fast-Path 2ms Skill Hit]:[/bold green] [dim]{matched_skill.description}[/dim]"
+            )
+            cmd = matched_skill.command_template
+            if "{device}" in cmd and snap.get("backlight"):
+                cmd = cmd.replace("{device}", snap["backlight"]["device"])
+            self.console.print(f"[dim]⚡ Running command: [cyan]{cmd}[/cyan]...[/dim]")
+            ctx = ExecutionContext(
+                task_id="cli_fast_skill",
+                workspace=Path.cwd().resolve(),
+                metadata={"allow_unsandboxed": True},
+            )
+            tool_res = await self.registry.execute("shell", {"command": cmd}, context=ctx)
+            out = (tool_res.stdout or tool_res.stderr or "").strip()
+            self.console.print(
+                f"\n[bold cyan]NANI (Zero-Token Fast Execution):[/bold cyan]\n{out or 'OK (exit code 0)'}\n"
+            )
+            return
+
+        provider = self.model_router.get_provider_for_capability(ModelCapability.FAST)
+        if not provider or not await provider.is_available():
+            self.console.print(
+                "[yellow]⚠ No active model provider configured. Set GEMINI_API_KEY or GROQ_API_KEY in .env.[/yellow]"
+            )
+            return
+
+        api_key = getattr(provider, "api_key", None) or settings.get_secret("gemini_api_key")
+        if not api_key:
+            self.console.print("[yellow]⚠ Gemini API key is missing.[/yellow]")
+            return
+
+        # Step 2: Dynamic Semantic Intent Classification (SYSTEM vs LEARNING vs CONVERSATIONAL)
+        intent_info = await self.intent_classifier.classify(prompt)
+        intent = intent_info.intent
+
+        if intent == UserIntent.LEARNING:
+            snippets = self.skill_store.search_knowledge(prompt, limit=3)
+            kb_context = ""
+            if snippets:
+                kb_context = (
+                    "\nRelevant Digest Knowledge Base:\n"
+                    + "\n".join(f"• {s.title}: {s.summary}" for s in snippets)
+                    + "\n"
+                )
+
+            system_instruction = (
+                "You are N.A.N.I., an autonomous AI engineer and personal assistant.\n"
+                "The user is asking a conceptual, educational, or theoretical question.\n"
+                f"{kb_context}\n"
+                "Provide a clear, accurate, deep, and structured explanation in natural language.\n"
+                "Include code snippets, architectural concepts, or real-world examples where helpful.\n"
+                "DO NOT call shell tools or attempt to inspect host machine hardware for conceptual queries."
+            )
+            tools = None  # No shell tools for learning questions — prevents false executions!
+
+        elif intent == UserIntent.SYSTEM:
+            grounding_context = MachineGrounding.format_grounding_prompt()
+            system_instruction = (
+                "You are N.A.N.I., an autonomous AI engineer and personal assistant running locally on the user's Linux machine.\n"
+                "You have access to native tools: 'shell', 'web_search', and 'read_file'.\n"
+                f"{grounding_context}\n"
+                "CORE BEHAVIOR RULES:\n"
+                "1. VERIFY APPS BEFORE CLAIMING THEY LAUNCHED:\n"
+                "   - When asked to open an app (e.g. Chrome, VS Code, Discord):\n"
+                "     FIRST verify if it is installed (e.g. `which <binary>`).\n"
+                "     If NOT installed, inform the user honestly that it is not installed and how to install it.\n"
+                "     If installed, launch it detached with `nohup <binary> >/dev/null 2>&1 &`.\n"
+                "2. NEVER GUESS PASSWORDS OR RUN UNSOLICITED SUDO:\n"
+                "   - NEVER attempt to guess passwords (never run `echo <password> | sudo -S`).\n"
+                "   - If an operation requires root/sudo, give the exact command to the user to run with their own credentials.\n"
+                "3. NEVER SUBSTITUTE APPS WITHOUT ASKING:\n"
+                "   - If the user asks for Chrome and it is not installed, DO NOT launch Firefox or another app instead.\n"
+                "4. SYSTEM & HARDWARE INSPECTION:\n"
+                "   - For local tasks (e.g. battery, brightness, files, processes), call 'shell' and explain the factual result in a natural voice."
+            )
+            tools = self._build_tools_spec()
+
+        else:
+            system_instruction = (
+                "You are N.A.N.I., a helpful, friendly, and knowledgeable AI assistant running locally on Linux.\n"
+                "Answer conversationally and concisely."
+            )
+            tools = None
+
         # Add user prompt to multi-turn conversation history
         self.history.append({"role": "user", "parts": [{"text": prompt}]})
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key={api_key}"
@@ -345,11 +386,13 @@ class InteractiveCLI:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for _ in range(max_turns):
-                payload = {
+                payload: dict[str, Any] = {
                     "systemInstruction": {"parts": [{"text": system_instruction}]},
                     "contents": self._get_api_contents(),
-                    "tools": tools,
                 }
+                if tools:
+                    payload["tools"] = tools
+
                 resp = await client.post(url, json=payload)
                 if resp.status_code != 200:
                     self.console.print(f"[red]Error from Gemini API: {resp.text[:300]}[/red]")
@@ -370,27 +413,84 @@ class InteractiveCLI:
 
                     if fn_name == "shell":
                         cmd = str(fn_args.get("command", "")).strip()
-                        self.console.print(f"[dim]⚡ Running command: [cyan]{cmd}[/cyan]...[/dim]")
-                        ctx = ExecutionContext(
-                            task_id="cli_interactive",
-                            workspace=Path.cwd().resolve(),
-                            metadata={"allow_unsandboxed": True},
-                        )
-                        tool_res = await self.registry.execute(
-                            "shell", {"command": cmd}, context=ctx
-                        )
-                        out = (tool_res.stdout or tool_res.stderr or "").strip()
-                        if not out:
-                            out = (
-                                "OK (exit code 0)"
-                                if tool_res.success
-                                else f"Command failed: {tool_res.error}"
+
+                        # Hard Security Guard: Automated password guessing / sudo -S is prohibited
+                        if re.search(r"echo\s+['\"].*?['\"]\s*\|\s*sudo\s+-S", cmd, re.IGNORECASE):
+                            self.console.print(
+                                "[bold red]🛑 Security Block: Automated password injection into sudo is forbidden.[/bold red]"
                             )
-                        result_payload = {
-                            "stdout": out,
-                            "exit_code": tool_res.exit_code,
-                            "success": tool_res.success,
-                        }
+                            result_payload = {
+                                "stdout": "",
+                                "stderr": (
+                                    "SECURITY ERROR: Automated password injection into sudo is forbidden. "
+                                    "Do NOT attempt to guess passwords. Provide the command for the user to execute."
+                                ),
+                                "exit_code": 1,
+                                "success": False,
+                            }
+                        # Launch Safety Guard: Prevent empty subshell nohup launches
+                        elif cmd.startswith("nohup ") and "$(" in cmd and "which" in cmd:
+                            m = re.search(r"which\s+([^)|>&]+)", cmd)
+                            binaries = m.group(1).split() if m else []
+                            found = any(shutil.which(b) for b in binaries)
+                            if not found:
+                                self.console.print(
+                                    f"[yellow]⚠ Launch halted: Binary not found among [{', '.join(binaries)}].[/yellow]"
+                                )
+                                result_payload = {
+                                    "stdout": "",
+                                    "stderr": f"LAUNCH FAILED: None of ({', '.join(binaries)}) are installed on this system.",
+                                    "exit_code": 127,
+                                    "success": False,
+                                }
+                            else:
+                                self.console.print(
+                                    f"[dim]⚡ Running command: [cyan]{cmd}[/cyan]...[/dim]"
+                                )
+                                ctx = ExecutionContext(
+                                    task_id="cli_interactive",
+                                    workspace=Path.cwd().resolve(),
+                                    metadata={"allow_unsandboxed": True},
+                                )
+                                tool_res = await self.registry.execute(
+                                    "shell", {"command": cmd}, context=ctx
+                                )
+                                out = (tool_res.stdout or tool_res.stderr or "").strip()
+                                if not out:
+                                    out = (
+                                        "OK (exit code 0)"
+                                        if tool_res.success
+                                        else f"Command failed: {tool_res.error}"
+                                    )
+                                result_payload = {
+                                    "stdout": out,
+                                    "exit_code": tool_res.exit_code,
+                                    "success": tool_res.success,
+                                }
+                        else:
+                            self.console.print(
+                                f"[dim]⚡ Running command: [cyan]{cmd}[/cyan]...[/dim]"
+                            )
+                            ctx = ExecutionContext(
+                                task_id="cli_interactive",
+                                workspace=Path.cwd().resolve(),
+                                metadata={"allow_unsandboxed": True},
+                            )
+                            tool_res = await self.registry.execute(
+                                "shell", {"command": cmd}, context=ctx
+                            )
+                            out = (tool_res.stdout or tool_res.stderr or "").strip()
+                            if not out:
+                                out = (
+                                    "OK (exit code 0)"
+                                    if tool_res.success
+                                    else f"Command failed: {tool_res.error}"
+                                )
+                            result_payload = {
+                                "stdout": out,
+                                "exit_code": tool_res.exit_code,
+                                "success": tool_res.success,
+                            }
                     elif fn_name == "web_search":
                         query = str(fn_args.get("query", "")).strip()
                         self.console.print(f"[dim]🌐 Searching web: [cyan]{query}[/cyan]...[/dim]")
