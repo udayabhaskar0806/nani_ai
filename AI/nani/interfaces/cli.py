@@ -157,3 +157,7 @@ def run_cli() -> None:
     tm, reg, orch = create_runtime()
     cli = InteractiveCLI(tm, reg, orch)
     asyncio.run(cli.run_loop())
+
+
+if __name__ == "__main__":
+    run_cli()
