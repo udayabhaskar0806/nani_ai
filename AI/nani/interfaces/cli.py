@@ -152,7 +152,11 @@ class InteractiveCLI:
             "1. Autonomously CALL the appropriate tool (e.g. 'shell' with the exact Linux command).\n"
             "2. NEVER tell the user to manually run commands in their terminal when you can execute them directly.\n"
             "3. Maintain full conversation context across turns. If the user gives follow-up feedback (e.g. 'not opened', 'failed', 'try another way', 'explain that'), reference previous actions, diagnose what went wrong, and take active corrective action instead of asking what they meant.\n"
-            "4. When launching desktop GUI applications (e.g. terminals, browsers, editors): launch them detached in background (e.g. 'nohup gnome-terminal >/dev/null 2>&1 &' or 'xterm &'). If the user reports it didn't open, try alternative terminal emulators like 'xterm &' or inspect $DISPLAY.\n"
+            "4. When launching desktop GUI applications or terminals across ANY Linux system (Wayland or X11, Ubuntu, Fedora, Arch, Debian, KDE, GNOME, etc.):\n"
+            "   - Dynamically detect and launch the installed terminal emulator, e.g.:\n"
+            "     nohup $(which x-terminal-emulator gnome-terminal konsole xfce4-terminal ptyxis alacritty kitty foot xterm 2>/dev/null | head -n 1) >/dev/null 2>&1 &\n"
+            "   - Always run GUI applications detached in the background using nohup and '&' so the shell returns immediately.\n"
+            "   - If no graphical display is active (e.g. headless server without $DISPLAY or $WAYLAND_DISPLAY), inform the user that no graphical display is attached.\n"
             "5. Once you get tool output, understand it and explain the result clearly and concisely in a natural human voice."
         )
 
