@@ -87,14 +87,27 @@ class GroqProvider(ModelProvider):
         if request.response_json_schema:
             payload["response_format"] = {"type": "json_object"}
 
-        t_start = time.monotonic()
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            resp = await client.post(GROQ_API_URL, headers=headers, json=payload)
+        models_to_try = [model]
+        for alt in ("qwen/qwen3.8-27b", "openai/gpt-oss-120b", "llama-3.3-70b-versatile"):
+            if alt not in models_to_try:
+                models_to_try.append(alt)
 
-        latency_ms = int((time.monotonic() - t_start) * 1000)
+        last_resp = None
+        for m in models_to_try:
+            payload["model"] = m
+            t_start = time.monotonic()
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                resp = await client.post(GROQ_API_URL, headers=headers, json=payload)
+            latency_ms = int((time.monotonic() - t_start) * 1000)
+            last_resp = resp
+            if resp.status_code == 200:
+                model = m
+                break
+            if resp.status_code != 404 and "model_not_found" not in resp.text:
+                break
 
-        if resp.status_code != 200:
-            err_msg = f"Groq API request failed with status {resp.status_code}: {resp.text[:500]}"
+        if last_resp is None or last_resp.status_code != 200:
+            err_msg = f"Groq API request failed with status {last_resp.status_code if last_resp else 'unknown'}: {last_resp.text[:500] if last_resp else ''}"
             global_logger.log_event(
                 event_type="MODEL_ERROR",
                 status="ERROR",
@@ -102,7 +115,8 @@ class GroqProvider(ModelProvider):
             )
             raise RuntimeError(err_msg)
 
-        data = resp.json()
+        data = last_resp.json()
+
         choices = data.get("choices", [])
         if not choices:
             raise RuntimeError("Groq returned empty choices in response.")
