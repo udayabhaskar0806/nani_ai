@@ -89,6 +89,7 @@ class ShellTool(BaseTool):
 
         timeout = float(kwargs.get("timeout") or self.default_timeout)
         task_id = context.task_id if context else None
+        allow_unsandboxed = bool(context and context.metadata.get("allow_unsandboxed", False))
 
         # Execute through SubprocessSupervisor with enforceable isolation
         argv = ["/bin/sh", "-c", command_str]
@@ -100,6 +101,7 @@ class ShellTool(BaseTool):
             task_id=task_id,
             isolated=self.isolated,
             network_allowed=False,
+            allow_unsandboxed=allow_unsandboxed,
         )
 
 

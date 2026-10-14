@@ -45,7 +45,9 @@ class Verifier:
                 failures.append(f"Tool execution failed: {result.error or result.stderr}")
 
         if not criteria:
-            is_ok = len(failures) == 0 and (result is None or result.success)
+            is_ok = len(failures) == 0 and (result is not None and result.success)
+            if not is_ok and result is None:
+                failures.append("No execution result or empirical verification criteria provided.")
             return VerificationResult(
                 verified=is_ok,
                 criteria_checked=[{"type": "default_success", "passed": is_ok}],

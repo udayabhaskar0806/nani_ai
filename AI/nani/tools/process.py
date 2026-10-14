@@ -14,7 +14,7 @@ from nani.core.task import RiskLevel, WorkerCapability
 from nani.tools.path_utils import resolve_safe_path
 from nani.tools.registry import BaseTool, ToolRegistry
 from nani.tools.result import ToolResult
-from nani.tools.supervisor import process_registry
+from nani.tools.supervisor import ExecutionIsolationAdapter, process_registry
 
 ALLOWED_SIGNALS = {
     int(signal.SIGTERM): "SIGTERM",
@@ -108,7 +108,10 @@ class ProcessTool(BaseTool):
                 return ToolResult.fail("Missing required parameter 'cmd' for start_process")
             cwd = kwargs.get("cwd") or "."
             task_id = context.task_id if context else None
-            return await self._start_process(str(cmd), str(cwd), ws, task_id)
+            allow_unsandboxed = bool(context and context.metadata.get("allow_unsandboxed", False))
+            return await self._start_process(
+                str(cmd), str(cwd), ws, task_id, allow_unsandboxed=allow_unsandboxed
+            )
         elif op_name == "terminate_process":
             pid = kwargs.get("pid")
             if pid is None:
@@ -121,36 +124,47 @@ class ProcessTool(BaseTool):
 
     async def _list_processes(self, limit: int) -> ToolResult:
         try:
+            # First attempt with standard ps options
             proc = await asyncio.create_subprocess_exec(
                 "ps",
                 "-eo",
                 "pid,ppid,comm,%cpu,%mem",
-                "--sort=-%cpu",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout_bytes, stderr_bytes = await proc.communicate()
             if proc.returncode != 0:
-                stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
-                return ToolResult.fail(
-                    f"ps command failed with exit code {proc.returncode}: {stderr_str}"
+                # Fallback to minimal ps args for busybox or minimal container environments
+                proc = await asyncio.create_subprocess_exec(
+                    "ps",
+                    "-o",
+                    "pid,ppid,comm",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
+                stdout_bytes, stderr_bytes = await proc.communicate()
+                if proc.returncode != 0:
+                    stderr_str = stderr_bytes.decode("utf-8", errors="replace").strip()
+                    return ToolResult.fail(
+                        f"ps command failed with exit code {proc.returncode}: {stderr_str or 'Process inspection error'}"
+                    )
 
             lines = stdout_bytes.decode("utf-8", errors="replace").splitlines()
             processes = []
-            for line in lines[1 : limit + 1]:
+            for line in lines[1:]:
                 parts = line.strip().split(None, 4)
-                if len(parts) >= 5:
+                if len(parts) >= 3:
                     try:
-                        processes.append(
-                            {
-                                "pid": int(parts[0]),
-                                "ppid": int(parts[1]),
-                                "comm": parts[2],
-                                "cpu": parts[3],
-                                "mem": parts[4],
-                            }
-                        )
+                        p_entry = {
+                            "pid": int(parts[0]),
+                            "ppid": int(parts[1]),
+                            "comm": parts[2],
+                            "cpu": parts[3] if len(parts) > 3 else "0.0",
+                            "mem": parts[4] if len(parts) > 4 else "0.0",
+                        }
+                        processes.append(p_entry)
+                        if len(processes) >= limit:
+                            break
                     except ValueError:
                         continue
 
@@ -181,12 +195,15 @@ class ProcessTool(BaseTool):
                 return ToolResult.fail(f"Process {pid} not found.")
 
             parts = lines[1].strip().split(None, 4)
+            if len(parts) < 1:
+                return ToolResult.fail(f"Process {pid} info unparseable.")
+
             return ToolResult.ok(
                 data={
-                    "pid": int(parts[0]),
-                    "ppid": int(parts[1]),
-                    "user": parts[2],
-                    "stat": parts[3],
+                    "pid": int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else pid,
+                    "ppid": int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0,
+                    "user": parts[2] if len(parts) > 2 else "unknown",
+                    "stat": parts[3] if len(parts) > 3 else "unknown",
                     "comm": parts[4] if len(parts) > 4 else "",
                 }
             )
@@ -194,12 +211,29 @@ class ProcessTool(BaseTool):
             return ToolResult.fail(f"Failed to get info for PID {pid}: {e}")
 
     async def _start_process(
-        self, cmd: str, cwd: str, workspace: Path, task_id: str | None
+        self,
+        cmd: str,
+        cwd: str,
+        workspace: Path,
+        task_id: str | None,
+        allow_unsandboxed: bool = False,
     ) -> ToolResult:
         try:
             safe_cwd = resolve_safe_path(cwd, workspace)
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            wrapped_cmd, is_isolated, reason = ExecutionIsolationAdapter.wrap_isolated_command(
+                ["/bin/sh", "-c", cmd],
+                workspace,
+                cwd=safe_cwd,
+                network_allowed=False,
+                allow_unsandboxed=allow_unsandboxed,
+            )
+            if not is_isolated:
+                return ToolResult.fail(
+                    f"ISOLATION_UNAVAILABLE: Unsandboxed arbitrary process execution is denied by default. {reason}"
+                )
+
+            proc = await asyncio.create_subprocess_exec(
+                *wrapped_cmd,
                 cwd=str(safe_cwd),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,

@@ -3,6 +3,7 @@ Coordinates TaskManager, Planner, CapabilityRouter, ToolRegistry, Verifier, and 
 Maintains interruptibility and enforces strict state transitions without direct database or subprocess access.
 """
 
+import json
 import uuid
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from nani.core.task_manager import TaskManager
 from nani.core.verifier import Verifier
 from nani.memory.journal import ActionJournal
 from nani.tools.registry import ToolRegistry
+from nani.tools.result import ToolResult
 
 IDEMPOTENT_TOOLS = frozenset(
     {
@@ -182,19 +184,28 @@ class Orchestrator:
                 workspace=Path(task.workspace_path).resolve(),
             )
 
-            # Crash reconciliation check: check if this step was previously in-flight
+            # Crash reconciliation check: check if this step was previously in-flight or succeeded
             with self.task_manager.db.get_connection() as conn:
                 cur = conn.execute(
-                    "SELECT action_id, status FROM actions WHERE step_id = ? ORDER BY timestamp DESC LIMIT 1",
+                    "SELECT action_id, status, result_json, error FROM actions WHERE step_id = ? ORDER BY timestamp DESC LIMIT 1",
                     (step.step_id,),
                 )
                 last_act = cur.fetchone()
 
-            if last_act and last_act["status"] == ActionStatus.RUNNING.value:
-                # The action crashed mid-flight! Check idempotency and verify side effects
-                if tool_name not in IDEMPOTENT_TOOLS:
-                    # Non-idempotent tool: check if step verification passes without replaying
-                    ver_check = self.verifier.verify_step(step, workspace_path=task.workspace_path)
+            if last_act:
+                act_status = last_act["status"]
+
+                if act_status == ActionStatus.SUCCESS.value:
+                    # Action already succeeded prior to crash! Reconcile result and advance without replaying
+                    res_raw = json.loads(last_act["result_json"] or "{}")
+                    recovered_res = ToolResult.ok(
+                        data=res_raw.get("data"),
+                        stdout=res_raw.get("stdout", ""),
+                        stderr=res_raw.get("stderr", ""),
+                    )
+                    ver_check = self.verifier.verify_step(
+                        step=step, result=recovered_res, workspace_path=task.workspace_path
+                    )
                     if ver_check.verified:
                         step.status = StepStatus.COMPLETED
                         task.current_step_index += 1
@@ -204,11 +215,45 @@ class Orchestrator:
                         )
                         continue
                     else:
-                        # Refuse to blindly re-execute non-idempotent action
                         return self.task_manager.fail_task(
                             task_id,
-                            reason=f"Crash recovery halted: non-idempotent operation '{tool_name}' was interrupted mid-execution. Refusing to replay uncertain side effect.",
+                            reason=f"Crash recovery halted: recovered action succeeded but verification failed: {'; '.join(ver_check.failure_reasons)}",
                         )
+
+                elif act_status == ActionStatus.RUNNING.value:
+                    # Action crashed mid-flight while RUNNING
+                    if tool_name not in IDEMPOTENT_TOOLS:
+                        # Non-idempotent tool: require explicit empirical verification criteria
+                        has_empirical = bool(
+                            step.verification
+                            and any(
+                                k in step.verification
+                                for k in ("path", "type", "checks", "expected_content", "regex")
+                            )
+                            and step.verification.get("type") != "default_success"
+                        )
+                        if not has_empirical:
+                            return self.task_manager.fail_task(
+                                task_id,
+                                reason=f"Crash recovery halted: non-idempotent operation '{tool_name}' was interrupted mid-execution with no empirical verification criteria. Refusing to replay uncertain side effect.",
+                            )
+
+                        ver_check = self.verifier.verify_step(
+                            step=step, result=None, workspace_path=task.workspace_path
+                        )
+                        if ver_check.verified:
+                            step.status = StepStatus.COMPLETED
+                            task.current_step_index += 1
+                            self.task_manager.persist_task(task)
+                            task = self.task_manager.set_current_step_index(
+                                task.task_id, task.current_step_index
+                            )
+                            continue
+                        else:
+                            return self.task_manager.fail_task(
+                                task_id,
+                                reason=f"Crash recovery halted: non-idempotent operation '{tool_name}' was interrupted mid-execution and empirical verification failed: {'; '.join(ver_check.failure_reasons)}.",
+                            )
 
             # Mark step in progress
             step.status = StepStatus.IN_PROGRESS

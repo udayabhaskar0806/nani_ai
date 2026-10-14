@@ -123,7 +123,7 @@ source venv/bin/activate
 # 2. Install core development runtime
 pip install -e ".[dev]"
 
-# 3. Run complete test suite (81 tests)
+# 3. Run complete test suite (87 tests)
 pytest -v
 
 # 4. Lint and Typecheck

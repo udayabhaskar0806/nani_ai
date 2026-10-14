@@ -8,7 +8,24 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
+
+
+class ConcurrencyError(Exception):
+    """Raised when an atomic Compare-And-Swap (CAS) lifecycle state transition fails due to concurrent modification."""
+
+    pass
+
+
+class MigrationError(Exception):
+    """Raised when a transactional database migration fails."""
+
+    pass
+
+
+MIGRATION_V3_SQL = """
+-- Schema v3: Add version column to tasks for Compare-And-Swap (CAS) lifecycle state protection
+"""
 
 MIGRATION_V2_SQL = """
 -- Task state transitions tracking
@@ -65,6 +82,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT NOT NULL,
     risk_level TEXT NOT NULL,
     current_step_index INTEGER DEFAULT 0,
+    version INTEGER DEFAULT 1,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     metadata_json TEXT DEFAULT '{}'
@@ -165,12 +183,6 @@ CREATE INDEX IF NOT EXISTS idx_episodic_memory_task_id ON episodic_memory(task_i
 """
 
 
-class MigrationError(Exception):
-    """Raised when a transactional database migration fails."""
-
-    pass
-
-
 class Database:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or Path("data/nani_v2.db")
@@ -217,6 +229,7 @@ class Database:
         migrations: dict[int, Callable[[sqlite3.Connection], None]] = {
             1: self._apply_migration_v1,
             2: self._apply_migration_v2,
+            3: self._apply_migration_v3,
         }
 
         current_ver = self.get_schema_version()
@@ -289,3 +302,10 @@ class Database:
             stmt = raw_stmt.strip()
             if stmt:
                 conn.execute(stmt)
+
+    def _apply_migration_v3(self, conn: sqlite3.Connection) -> None:
+        """Applies schema v3: guarantees version column on tasks for CAS state tracking."""
+        cur = conn.execute("PRAGMA table_info(tasks);")
+        task_cols = [r["name"] for r in cur.fetchall()]
+        if "version" not in task_cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER DEFAULT 1;")

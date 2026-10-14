@@ -77,20 +77,25 @@ class ExecutionIsolationAdapter:
         cls,
         argv: list[str],
         workspace: Path,
+        cwd: Path | None = None,
         network_allowed: bool = False,
+        allow_unsandboxed: bool = False,
     ) -> tuple[list[str], bool, str]:
         """Wraps argv in bwrap sandbox enforcing read-only root and read-write workspace only.
 
         Returns (wrapped_argv, success, reason).
         """
         if not cls.is_bwrap_available():
+            if allow_unsandboxed or os.environ.get("NANI_ALLOW_UNSANDBOXED_FOR_TESTS") == "1":
+                return (argv, True, "EXPLICIT_UNSANDBOXED_AUTHORIZED")
             return (
                 argv,
                 False,
-                "ISOLATION_UNAVAILABLE: Unsandboxed arbitrary shell execution is denied by default. Linux sandbox (bwrap) unavailable.",
+                "ISOLATION_UNAVAILABLE: Unsandboxed arbitrary execution is denied by default. Linux sandbox (bwrap) unavailable.",
             )
 
         ws_str = str(workspace.resolve())
+        target_cwd = str((cwd or workspace).resolve())
         # Base bwrap isolation flags
         wrapped = [
             "bwrap",
@@ -109,8 +114,8 @@ class ExecutionIsolationAdapter:
         if not network_allowed:
             wrapped.append("--unshare-net")
 
-        # Set chdir to workspace
-        wrapped.extend(["--chdir", ws_str])
+        # Set chdir to target working directory inside sandbox
+        wrapped.extend(["--chdir", target_cwd])
         wrapped.extend(argv)
         return (wrapped, True, "OK")
 
@@ -172,6 +177,7 @@ class SubprocessSupervisor:
         task_id: str | None = None,
         isolated: bool = True,
         network_allowed: bool = False,
+        allow_unsandboxed: bool = False,
     ) -> ToolResult:
         """Runs a subprocess with full supervision, bounded streaming, and timeout cleanup."""
         t_start = time.monotonic()
@@ -180,7 +186,11 @@ class SubprocessSupervisor:
         final_argv = argv
         if isolated:
             wrapped, ok, err_reason = ExecutionIsolationAdapter.wrap_isolated_command(
-                argv, workspace, network_allowed=network_allowed
+                argv,
+                workspace,
+                cwd=cwd,
+                network_allowed=network_allowed,
+                allow_unsandboxed=allow_unsandboxed,
             )
             if not ok:
                 return ToolResult.fail(

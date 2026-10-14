@@ -12,7 +12,7 @@ from nani.core.task import RiskLevel, WorkerCapability
 from nani.tools.path_utils import resolve_safe_path
 from nani.tools.registry import BaseTool, ToolRegistry
 from nani.tools.result import ToolResult
-from nani.tools.supervisor import SubprocessSupervisor
+from nani.tools.supervisor import ExecutionIsolationAdapter, SubprocessSupervisor
 
 SAFE_REF_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\./~^@{}]+$")
 FORBIDDEN_KEYWORDS = [
@@ -107,14 +107,27 @@ class GitTool(BaseTool):
             if not SAFE_REF_PATTERN.match(arg_str):
                 return ToolResult.fail(f"Forbidden characters in Git target argument '{arg_str}'.")
 
-        # Base safe command with disabled hooks, isolated configuration, and no pager
+        # Base safe command with disabled hooks, isolated configuration, disabled fsmonitor, and no pager
         base_cmd = [
             "git",
             "--no-pager",
             "-c",
             "core.hooksPath=/dev/null",
             "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.pager=cat",
+            "-c",
+            "diff.external=",
+            "-c",
+            "core.editor=true",
+            "-c",
+            "sequence.editor=true",
+            "-c",
+            "credential.helper=",
+            "-c",
             "safe.directory=*",
+            "--no-optional-locks",
         ]
 
         # Operation construction via positive allowlist
@@ -187,6 +200,7 @@ class GitTool(BaseTool):
         }
 
         task_id = context.task_id if context else None
+        is_isolated = ExecutionIsolationAdapter.is_bwrap_available()
         return await SubprocessSupervisor.run_supervised(
             argv=cmd_args,
             cwd=safe_cwd,
@@ -194,7 +208,7 @@ class GitTool(BaseTool):
             timeout=15.0,
             env=git_env,
             task_id=task_id,
-            isolated=False,
+            isolated=is_isolated,
         )
 
 

@@ -22,7 +22,7 @@ from nani.core.task import (
     TaskStatus,
     WorkerCapability,
 )
-from nani.memory.database import Database
+from nani.memory.database import ConcurrencyError, Database
 from nani.memory.journal import ActionJournal
 
 
@@ -131,6 +131,11 @@ class TaskManager:
                     )
                 )
 
+            version = (
+                t_row["version"]
+                if "version" in t_row.keys() and t_row["version"] is not None
+                else 1
+            )
             return Task(
                 task_id=t_row["task_id"],
                 original_goal=t_row["original_goal"],
@@ -140,6 +145,7 @@ class TaskManager:
                 risk_level=RiskLevel(t_row["risk_level"]),
                 plan=plan_steps,
                 current_step_index=t_row["current_step_index"],
+                version=version,
                 created_at=t_row["created_at"],
                 updated_at=t_row["updated_at"],
                 metadata=json.loads(t_row["metadata_json"] or "{}"),
@@ -169,9 +175,13 @@ class TaskManager:
         return tasks
 
     def transition_task(
-        self, task_id: str, to_status: TaskStatus, reason: str | None = None
+        self,
+        task_id: str,
+        to_status: TaskStatus,
+        reason: str | None = None,
+        expected_version: int | None = None,
     ) -> Task:
-        """Validates and applies a lifecycle state transition atomically with history."""
+        """Validates and applies a lifecycle state transition atomically with history and CAS verification."""
         with self.db.get_connection() as conn:
             cur = conn.execute("SELECT status, version FROM tasks WHERE task_id = ?", (task_id,))
             row = cur.fetchone()
@@ -179,6 +189,14 @@ class TaskManager:
                 raise KeyError(f"Task '{task_id}' not found.")
 
             current_status = TaskStatus(row["status"])
+            current_ver = (
+                row["version"] if "version" in row.keys() and row["version"] is not None else 1
+            )
+
+            if expected_version is not None and expected_version != current_ver:
+                raise ConcurrencyError(
+                    f"CAS conflict: Task '{task_id}' was concurrently modified (expected version {expected_version}, actual version {current_ver})."
+                )
 
             # Terminal state protection
             if current_status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
@@ -193,13 +211,17 @@ class TaskManager:
                 )
 
             now = time.time()
-            # Update task status and increment version atomically
-            conn.execute(
+            # Update task status and increment version atomically with CAS verification
+            cur_upd = conn.execute(
                 """UPDATE tasks
                    SET status = ?, version = version + 1, updated_at = ?
-                   WHERE task_id = ?""",
-                (to_status.value, now, task_id),
+                   WHERE task_id = ? AND version = ?""",
+                (to_status.value, now, task_id, current_ver),
             )
+            if cur_upd.rowcount == 0:
+                raise ConcurrencyError(
+                    f"CAS conflict: Failed to update task '{task_id}' from version {current_ver} due to concurrent modification."
+                )
 
             # Record transition in the SAME transaction
             import uuid
@@ -287,53 +309,91 @@ class TaskManager:
         self.persist_task(task)
         return task
 
-    def persist_task(self, task: Task) -> None:
-        """Persists the Task state atomically to SQLite with secret redaction and CAS protection."""
+    def persist_task(self, task: Task, expected_version: int | None = None) -> None:
+        """Persists the Task state atomically to SQLite with secret redaction, terminal protection, and CAS."""
         task.mark_updated()
         safe_metadata = sanitize_data_structure(task.metadata)
         meta_json = json.dumps(safe_metadata)
 
         with self.db.get_connection() as conn:
-            # Check terminal state protection: do NOT overwrite CANCELLED/FAILED task with active state
-            cur = conn.execute("SELECT status FROM tasks WHERE task_id = ?", (task.task_id,))
+            # Check terminal state protection: do NOT overwrite CANCELLED/FAILED/COMPLETED task with active state
+            cur = conn.execute(
+                "SELECT status, version FROM tasks WHERE task_id = ?", (task.task_id,)
+            )
             row = cur.fetchone()
             if row:
                 db_status = TaskStatus(row["status"])
-                if db_status in (TaskStatus.CANCELLED, TaskStatus.FAILED) and task.status not in (
+                if db_status in (
                     TaskStatus.CANCELLED,
                     TaskStatus.FAILED,
+                    TaskStatus.COMPLETED,
+                ) and task.status not in (
+                    TaskStatus.CANCELLED,
+                    TaskStatus.FAILED,
+                    TaskStatus.COMPLETED,
                 ):
-                    # Stale update protection: prevent overwriting cancellation/failure
+                    # Stale update protection: prevent overwriting terminal status
                     return
 
-            conn.execute(
-                """INSERT INTO tasks (
-                       task_id, original_goal, interpreted_goal, workspace_path,
-                       status, risk_level, current_step_index, created_at, updated_at, metadata_json
-                   )
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(task_id) DO UPDATE SET
-                       original_goal = excluded.original_goal,
-                       interpreted_goal = excluded.interpreted_goal,
-                       workspace_path = excluded.workspace_path,
-                       status = excluded.status,
-                       risk_level = excluded.risk_level,
-                       current_step_index = excluded.current_step_index,
-                       updated_at = excluded.updated_at,
-                       metadata_json = excluded.metadata_json""",
-                (
-                    task.task_id,
-                    task.original_goal,
-                    task.interpreted_goal,
-                    task.workspace_path,
-                    task.status.value,
-                    task.risk_level.value,
-                    task.current_step_index,
-                    task.created_at,
-                    task.updated_at,
-                    meta_json,
-                ),
-            )
+                current_ver = (
+                    row["version"] if "version" in row.keys() and row["version"] is not None else 1
+                )
+                if expected_version is not None and expected_version != current_ver:
+                    raise ConcurrencyError(
+                        f"CAS conflict in persist_task: Task '{task.task_id}' was concurrently modified (expected version {expected_version}, actual {current_ver})."
+                    )
+
+                cur_upd = conn.execute(
+                    """UPDATE tasks SET
+                           original_goal = ?,
+                           interpreted_goal = ?,
+                           workspace_path = ?,
+                           status = ?,
+                           risk_level = ?,
+                           current_step_index = ?,
+                           version = version + 1,
+                           updated_at = ?,
+                           metadata_json = ?
+                       WHERE task_id = ? AND version = ?""",
+                    (
+                        task.original_goal,
+                        task.interpreted_goal,
+                        task.workspace_path,
+                        task.status.value,
+                        task.risk_level.value,
+                        task.current_step_index,
+                        task.updated_at,
+                        meta_json,
+                        task.task_id,
+                        current_ver,
+                    ),
+                )
+                if cur_upd.rowcount == 0:
+                    raise ConcurrencyError(
+                        f"CAS conflict: Failed to update task '{task.task_id}' from version {current_ver} due to concurrent modification."
+                    )
+                task.version = current_ver + 1
+            else:
+                conn.execute(
+                    """INSERT INTO tasks (
+                           task_id, original_goal, interpreted_goal, workspace_path,
+                           status, risk_level, current_step_index, version, created_at, updated_at, metadata_json
+                       )
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        task.task_id,
+                        task.original_goal,
+                        task.interpreted_goal,
+                        task.workspace_path,
+                        task.status.value,
+                        task.risk_level.value,
+                        task.current_step_index,
+                        task.version,
+                        task.created_at,
+                        task.updated_at,
+                        meta_json,
+                    ),
+                )
 
             for step in task.plan:
                 safe_ver = sanitize_data_structure(step.verification)

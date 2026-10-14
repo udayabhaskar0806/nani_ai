@@ -18,7 +18,7 @@ from nani.core.task import (
     WorkerCapability,
 )
 from nani.core.task_manager import TaskManager
-from nani.memory.database import Database
+from nani.memory.database import ConcurrencyError, Database
 from nani.models.base import ModelCapability
 from nani.models.router import ModelRouter
 from nani.tools.filesystem import register_filesystem_tools
@@ -381,3 +381,181 @@ def test_f16_model_router_purges_stale_capabilities():
     # Coding should now be None, not pointing to vision provider
     assert router.get_provider_for_capability(ModelCapability.CODING) is None
     assert router.get_provider_for_capability(ModelCapability.VISION) is p2
+
+
+# Process isolation: start_process is confined and cannot write outside workspace
+@pytest.mark.asyncio
+async def test_process_start_process_isolated(tmp_path: Path):
+    ws, tm, reg, orch = setup_runtime(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    context = ExecutionContext(task_id="t1", workspace=ws)
+    await reg.execute(
+        "process",
+        {
+            "operation": "start_process",
+            "cmd": "printf audit > ../outside/escaped_process.txt",
+        },
+        context=context,
+    )
+    # The process must NOT have escaped to write outside the workspace
+    assert not (outside / "escaped_process.txt").exists()
+
+
+# Git safety: repository-configured external helpers (fsmonitor, diff.external) are neutralized
+@pytest.mark.asyncio
+async def test_git_repository_configured_helpers_neutralized(tmp_path: Path):
+    ws, tm, reg, orch = setup_runtime(tmp_path)
+    repo = ws / "repo"
+    repo.mkdir()
+
+    def run_git(*args):
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    run_git("init")
+    run_git("config", "user.email", "audit@example.invalid")
+    run_git("config", "user.name", "Audit")
+    (repo / "f.txt").write_text("hello")
+    run_git("add", "f.txt")
+    run_git("commit", "-m", "init")
+
+    # Configure a malicious external helper in repository .git/config
+    marker_file = ws / "helper_ran.txt"
+    helper_script = ws / "malicious_helper.sh"
+    helper_script.write_text(f"#!/bin/sh\necho pwned > {marker_file}\n")
+    helper_script.chmod(0o755)
+
+    run_git("config", "core.fsmonitor", str(helper_script))
+    run_git("config", "diff.external", str(helper_script))
+
+    context = ExecutionContext(task_id="t1", workspace=ws)
+    # Run git status through registry
+    st_res = await reg.execute(
+        "git",
+        {"operation": "status", "cwd": "repo"},
+        context=context,
+    )
+    assert st_res.success is True
+    # The helper must NOT have been executed
+    assert not marker_file.exists()
+
+
+# Database migration: upgrading v2 database to v3 adds version column
+def test_database_migration_v2_to_v3(tmp_path: Path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy_v2.db"
+    conn = sqlite3.connect(str(db_path))
+    # Create schema v2 state without version column
+    conn.execute(
+        "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);"
+    )
+    conn.execute("INSERT INTO schema_version VALUES (1, 100.0);")
+    conn.execute("INSERT INTO schema_version VALUES (2, 200.0);")
+    conn.execute(
+        """CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY, original_goal TEXT, interpreted_goal TEXT,
+            workspace_path TEXT, status TEXT, risk_level TEXT, current_step_index INTEGER,
+            created_at REAL, updated_at REAL, metadata_json TEXT
+        );"""
+    )
+    conn.commit()
+    conn.close()
+
+    # Open with Database class; must run migration 3 and add version column
+    db = Database(db_path)
+    assert db.get_schema_version() == 3
+
+    with db.get_connection() as c:
+        cols = [r["name"] for r in c.execute("PRAGMA table_info(tasks)").fetchall()]
+    assert "version" in cols
+
+
+# Concurrency: TaskManager rejects concurrent state transitions with ConcurrencyError
+def test_task_manager_cas_concurrency_conflict(tmp_path: Path):
+    ws, tm, reg, orch = setup_runtime(tmp_path)
+    task = tm.create_task("cas test", str(ws))
+    assert task.version == 1
+
+    # Transition with correct expected_version succeeds
+    t1 = tm.transition_task(task.task_id, TaskStatus.PLANNING, expected_version=1)
+    assert t1.version == 2
+
+    # Attempting transition with stale expected_version=1 must raise ConcurrencyError
+    with pytest.raises(ConcurrencyError, match="CAS conflict"):
+        tm.transition_task(task.task_id, TaskStatus.RUNNING, expected_version=1)
+
+
+# Crash recovery: already-succeeded action is not replayed
+@pytest.mark.asyncio
+async def test_crash_recovery_does_not_replay_succeeded_action(tmp_path: Path):
+    ws, tm, reg, orch = setup_runtime(tmp_path)
+    task = tm.create_task("crash after success", str(ws))
+    step = make_step("write_file", {"path": "counter.txt", "content": "1"})
+
+    out = await orch.run_task(task.task_id, [step])
+    assert out.status == TaskStatus.COMPLETED
+
+    # Reset task back to RUNNING and step index to 0, leaving action in SUCCESS state
+    with tm.db.get_connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET status = 'RUNNING', current_step_index = 0 WHERE task_id = ?",
+            (task.task_id,),
+        )
+        conn.execute("UPDATE plan_steps SET status = 'PENDING' WHERE task_id = ?", (task.task_id,))
+        conn.commit()
+
+    restarted_tm = TaskManager(Database(ws / "hardening_audit.db"))
+    restarted_orch = Orchestrator(restarted_tm, reg)
+    restarted_task = await restarted_orch.run_task(task.task_id)
+
+    # Step must advance to COMPLETED without re-executing
+    assert restarted_task.status == TaskStatus.COMPLETED
+    assert (ws / "counter.txt").read_text() == "1"
+
+
+# Crash recovery: interrupted non-idempotent action without empirical criteria fails closed
+@pytest.mark.asyncio
+async def test_crash_recovery_interrupted_without_criteria_fails_closed(tmp_path: Path):
+    ws, tm, reg, orch = setup_runtime(tmp_path)
+    task = tm.create_task("crash mid flight", str(ws))
+    # Step with no verification criteria
+    step = PlanStep(
+        order=1,
+        description="unverified_action",
+        capability_required=WorkerCapability.SYSTEM,
+        actions=[
+            Action(
+                worker="system_worker", tool="shell", parameters={"command": "printf x >> log.txt"}
+            )
+        ],
+        verification={},
+    )
+    tm.start_task(task.task_id)
+    tm.update_plan(task.task_id, [step])
+    tm.transition_task(task.task_id, TaskStatus.RUNNING)
+
+    # Insert action with status RUNNING to simulate mid-flight crash
+    import time
+
+    with tm.db.get_connection() as conn:
+        conn.execute(
+            """INSERT INTO actions (action_id, task_id, step_id, worker, tool, parameters_json, timestamp, status)
+               VALUES ('act_crash', ?, ?, 'system_worker', 'shell', '{}', ?, 'RUNNING')""",
+            (task.task_id, step.step_id, time.time()),
+        )
+        conn.commit()
+
+    restarted_tm = TaskManager(Database(ws / "hardening_audit.db"))
+    restarted_orch = Orchestrator(restarted_tm, reg)
+    out = await restarted_orch.run_task(task.task_id)
+
+    # Must fail closed with crash recovery halt, never falsely complete
+    assert out.status == TaskStatus.FAILED
+    assert "Crash recovery halted" in (out.metadata.get("error", "") or str(out))

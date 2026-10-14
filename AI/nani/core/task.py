@@ -145,6 +145,7 @@ class Task(BaseModel):
     risk_level: RiskLevel = RiskLevel.LOW
     plan: list[PlanStep] = Field(default_factory=list)
     current_step_index: int = 0
+    version: int = 1
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
     metadata: dict[str, Any] = Field(default_factory=dict)
